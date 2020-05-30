@@ -15,7 +15,8 @@ from PIL import Image  # using pillow-simd for increased speed
 import torch
 import torch.utils.data as data
 from torchvision import transforms
-
+import torch.nn.functional as F
+import cv2
 
 def pil_loader(path):
     # open path as file to avoid ResourceWarning
@@ -46,7 +47,7 @@ class MonoDataset(data.Dataset):
                  frame_idxs,
                  num_scales,
                  is_train=False,
-                 img_ext='.jpg'):
+                 img_ext='.png'):
         super(MonoDataset, self).__init__()
 
         self.data_path = data_path
@@ -85,7 +86,7 @@ class MonoDataset(data.Dataset):
             self.resize[i] = transforms.Resize((self.height // s, self.width // s),
                                                interpolation=self.interp)
 
-        self.load_depth = self.check_depth()
+        self.load_depth = True
 
     def preprocess(self, inputs, color_aug):
         """Resize colour images to the required scales and augment if required
@@ -186,8 +187,28 @@ class MonoDataset(data.Dataset):
 
         if self.load_depth:
             depth_gt = self.get_depth(folder, frame_index, side, do_flip)
+            def center_crop(depth_image,h=160,w=320):
+                mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
+                origin_h = depth_image.shape[0]
+                origin_w = depth_image.shape[1]
+                mask[int(origin_h/2-h/2):int(origin_h/2+h/2),int(origin_w/2-w/2):int(origin_w/2+w/2)] = 1
+                kernel = np.ones((4, 4), np.uint8)
+                depth_curr_dilated = cv2.dilate(depth_image, kernel)
+                sparse_depth = depth_image * mask
+                #sparse_depth = depth_curr_dilated * mask
+                return sparse_depth,mask
+            sp_depth,mask = center_crop(depth_gt)
+            kernel = np.ones((7,7),np.uint8)
+            dilated_mask = cv2.dilate(mask,kernel)
+            erode_mask = cv2.erode(mask,kernel)
+            mask_edge = dilated_mask - erode_mask
+
+            inputs["depth_gt_part"] = torch.from_numpy(sp_depth).unsqueeze(0)
+            #inputs["mask"] = torch.from_numpy(mask).unsqueeze(0)
+            inputs["mask_edge"] = torch.from_numpy(mask_edge).unsqueeze(0)
             inputs["depth_gt"] = np.expand_dims(depth_gt, 0)
             inputs["depth_gt"] = torch.from_numpy(inputs["depth_gt"].astype(np.float32))
+            
 
         if "s" in self.frame_idxs:
             stereo_T = np.eye(4, dtype=np.float32)

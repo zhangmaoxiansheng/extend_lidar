@@ -1,9 +1,3 @@
-# Copyright Niantic 2019. Patent Pending. All rights reserved.
-#
-# This software is licensed under the terms of the Monodepth2 licence
-# which allows for non-commercial use only, the full terms of which are made
-# available in the LICENSE file.
-
 from __future__ import absolute_import, division, print_function
 
 import torch
@@ -34,7 +28,6 @@ class PoseDecoder(nn.Module):
 
     def forward(self, input_features):
         last_features = [f[-1] for f in input_features]
-
         cat_features = [self.relu(self.convs["squeeze"](f)) for f in last_features]
         cat_features = torch.cat(cat_features, 1)
 

@@ -20,17 +20,17 @@ class MonodepthOptions:
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
-                                 default=os.path.join(file_dir, "kitti_data"))
+                                 default=os.path.join(file_dir, "kitti"))
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join(os.path.expanduser("~"), "tmp"))
+                                 default=os.path.join(file_dir, "tmp"))
 
         # TRAINING options
         self.parser.add_argument("--model_name",
                                  type=str,
                                  help="the name of the folder to save the model in",
-                                 default="mdp")
+                                 default="mdp_dep_scale5_3input")
         self.parser.add_argument("--split",
                                  type=str,
                                  help="which training split to use",
@@ -44,11 +44,11 @@ class MonodepthOptions:
         self.parser.add_argument("--dataset",
                                  type=str,
                                  help="dataset to train on",
-                                 default="kitti",
+                                 default="kitti_depth",
                                  choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test"])
         self.parser.add_argument("--png",
                                  help="if set, trains from raw KITTI png files (instead of jpgs)",
-                                 action="store_true")
+                                 action="store_false")
         self.parser.add_argument("--height",
                                  type=int,
                                  help="input image height",
@@ -69,7 +69,7 @@ class MonodepthOptions:
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",
-                                 default=0.1)
+                                 default=0.9)
         self.parser.add_argument("--max_depth",
                                  type=float,
                                  help="maximum depth",
@@ -82,7 +82,39 @@ class MonodepthOptions:
                                  type=int,
                                  help="frames to load",
                                  default=[0, -1, 1])
-
+        self.parser.add_argument("--refine",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--loss_mask",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--opt_all",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--ref_pose",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--pnp",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--after_pnp",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--gan",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--edge_refine",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--refine_stage",
+                                 type=int,
+                                 help="frames to load",
+                                 default=4)
+        self.parser.add_argument("--refine_model",
+                                 type=str,
+                                 default='s')
+        
+        
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
                                  type=int,
@@ -150,7 +182,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=str,
                                  help="models to load",
-                                 default=["encoder", "depth", "pose_encoder", "pose"])
+                                 default=["encoder", "depth", "pose_encoder", "pose","mid_refine"])
 
         # LOGGING options
         self.parser.add_argument("--log_frequency",

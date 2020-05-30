@@ -24,8 +24,39 @@ def disp_to_depth(disp, min_depth, max_depth):
     depth = 1 / scaled_disp
     return scaled_disp, depth
 
+def depth_to_disp(dep, min_depth, max_depth):
+    depth = dep.clone()
+    mask = depth.sign()
+    depth[depth == 0] = 1
+    min_disp = 1 / max_depth
+    max_disp = 1 / min_depth
+    disp = ((1 / depth) - min_disp) / (max_disp - min_disp)
+    disp = disp * mask
+    warning = torch.sum(torch.isnan(disp))
+    if warning:
+        print("nan in depth2disp")
+    return disp
 
-def transformation_from_parameters(axisangle, translation, invert=False):
+def transformation_from_parameters(axisangle, translation, invert=False, scale=1):
+    """Convert the network's (axisangle, translation) output into a 4x4 matrix
+    """
+    R = rot_from_axisangle(axisangle)
+    t = translation.clone() * scale
+
+    if invert:
+        R = R.transpose(1, 2)
+        t *= -1
+
+    T = get_translation_matrix(t)
+
+    if invert:
+        M = torch.matmul(R, T)
+    else:
+        M = torch.matmul(T, R)
+
+    return M
+
+def transformation_from_parameters2(axisangle, translation, invert=False):
     """Convert the network's (axisangle, translation) output into a 4x4 matrix
     """
     R = rot_from_axisangle(axisangle)
@@ -42,8 +73,7 @@ def transformation_from_parameters(axisangle, translation, invert=False):
     else:
         M = torch.matmul(T, R)
 
-    return M
-
+    return M, R, T
 
 def get_translation_matrix(translation_vector):
     """Convert a translation vector into a 4x4 transformation matrix
@@ -102,14 +132,13 @@ def rot_from_axisangle(vec):
 
     return rot
 
-
 class ConvBlock(nn.Module):
     """Layer to perform a convolution followed by ELU
     """
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, dilation=1):
         super(ConvBlock, self).__init__()
 
-        self.conv = Conv3x3(in_channels, out_channels)
+        self.conv = Conv3x3(in_channels, out_channels, dilation=dilation)
         self.nonlin = nn.ELU(inplace=True)
 
     def forward(self, x):
@@ -121,20 +150,19 @@ class ConvBlock(nn.Module):
 class Conv3x3(nn.Module):
     """Layer to pad and convolve input
     """
-    def __init__(self, in_channels, out_channels, use_refl=True):
+    def __init__(self, in_channels, out_channels, dilation = 1,use_refl=True):
         super(Conv3x3, self).__init__()
 
         if use_refl:
-            self.pad = nn.ReflectionPad2d(1)
+            self.pad = nn.ReflectionPad2d(dilation)
         else:
-            self.pad = nn.ZeroPad2d(1)
-        self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3)
+            self.pad = nn.ZeroPad2d(dilation)
+        self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3,dilation=dilation)
 
     def forward(self, x):
         out = self.pad(x)
         out = self.conv(out)
         return out
-
 
 class BackprojectDepth(nn.Module):
     """Layer to transform a depth image into a point cloud
@@ -206,13 +234,28 @@ def get_smooth_loss(disp, img):
     grad_disp_x = torch.abs(disp[:, :, :, :-1] - disp[:, :, :, 1:])
     grad_disp_y = torch.abs(disp[:, :, :-1, :] - disp[:, :, 1:, :])
 
-    grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
-    grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+    grad_disp_x2 = torch.abs(grad_disp_x[:, :, :, :-1] - grad_disp_x[:, :, :, 1:])
+    grad_disp_y2 = torch.abs(grad_disp_y[:, :, :-1, :] - grad_disp_y[:, :, 1:, :])
+
+    grad_img_x = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:])
+    grad_img_y = torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
+
+    grad_img_x2 = torch.abs(grad_img_x[:, :, :, :-1] - grad_img_x[:, :, :, 1:])
+    grad_img_y2 = torch.abs(grad_img_y[:, :, :-1, :] - grad_img_y[:, :, 1:, :])
+
+    grad_img_x = torch.mean(grad_img_x, 1, keepdim=True)
+    grad_img_y = torch.mean(grad_img_y, 1, keepdim=True)
+
+    grad_img_x2 = torch.mean(grad_img_x2, 1, keepdim=True)
+    grad_img_y2 = torch.mean(grad_img_y2, 1, keepdim=True)
 
     grad_disp_x *= torch.exp(-grad_img_x)
     grad_disp_y *= torch.exp(-grad_img_y)
 
-    return grad_disp_x.mean() + grad_disp_y.mean()
+    grad_disp_x2 *= torch.exp(-grad_img_x2)
+    grad_disp_y2 *= torch.exp(-grad_img_y2)
+
+    return grad_disp_x, grad_disp_y, grad_disp_x2, grad_disp_y2
 
 
 class SSIM(nn.Module):

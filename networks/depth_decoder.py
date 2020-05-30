@@ -15,9 +15,10 @@ from layers import *
 
 
 class DepthDecoder(nn.Module):
-    def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True):
+    def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True, refine = False):
         super(DepthDecoder, self).__init__()
 
+        self.refine = refine
         self.num_output_channels = num_output_channels
         self.use_skips = use_skips
         self.upsample_mode = 'nearest'
@@ -61,5 +62,8 @@ class DepthDecoder(nn.Module):
             x = self.convs[("upconv", i, 1)](x)
             if i in self.scales:
                 self.outputs[("disp", i)] = self.sigmoid(self.convs[("dispconv", i)](x))
+            if i == 0 and self.refine:
+                self.outputs["disp_feature"] = x
+                
 
         return self.outputs

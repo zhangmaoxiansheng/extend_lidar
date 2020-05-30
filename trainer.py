@@ -112,11 +112,11 @@ class Trainer:
 
         # data
         datasets_dict = {"kitti": datasets.KITTIRAWDataset,
-                         "kitti_odom": datasets.KITTIOdomDataset}
+                         "kitti_odom": datasets.KITTIOdomDataset,
+                         "kitti_depth":datasets.KITTIDepthDataset}
         self.dataset = datasets_dict[self.opt.dataset]
 
-        fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
-
+        fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files_p.txt")
         train_filenames = readlines(fpath.format("train"))
         val_filenames = readlines(fpath.format("val"))
         img_ext = '.png' if self.opt.png else '.jpg'
@@ -422,6 +422,16 @@ class Trainer:
             disp = outputs[("disp", scale)]
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
+            depth_pred = outputs[("depth", 0, scale)]
+            depth_pred = F.interpolate(
+                    depth_pred, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+            depth_part_gt =  F.interpolate(
+                    inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+            mask =depth_part_gt > 0.1
+
+            depth_loss = torch.abs(depth_pred[mask] - depth_part_gt[mask])
+            depth_loss = depth_loss.mean() / 50
+            losses["loss/depth_{}".format(scale)] = depth_loss
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
@@ -488,6 +498,7 @@ class Trainer:
             smooth_loss = get_smooth_loss(norm_disp, color)
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
+            loss += depth_loss
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
 

@@ -7,11 +7,12 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from layers import disp_to_depth
+from layers import disp_to_depth, depth_to_disp
 from utils import readlines
 from options import MonodepthOptions
 import datasets
 import networks
+import torch.nn.functional as F
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
@@ -74,20 +75,23 @@ def evaluate(opt):
 
         print("-> Loading weights from {}".format(opt.load_weights_folder))
 
-        filenames = readlines(os.path.join(splits_dir, opt.eval_split, "test_files.txt"))
+        #filenames = readlines(os.path.join(splits_dir, opt.eval_split, "val_files_p.txt"))
+        filenames = readlines(os.path.join(splits_dir, "eigen", "test_files_p.txt"))
         encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
+        refine = opt.refine
+
 
         encoder_dict = torch.load(encoder_path)
 
-        dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
+        dataset = datasets.KITTIDepthDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
                                            [0], 4, is_train=False)
-        dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
+        dataloader = DataLoader(dataset, 1, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
         encoder = networks.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc)
+        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc,refine=refine)
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
@@ -97,23 +101,54 @@ def evaluate(opt):
         encoder.eval()
         depth_decoder.cuda()
         depth_decoder.eval()
+        if refine:
+            opt.refine_stage = list(range(opt.refine_stage))
+            renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
+            crop_h = [96,128,160,192]
+            crop_w = [192,256,384,640]
+            if len(opt.refine_stage) > 4:
+                crop_h = [96,128,160,192,192]
+                crop_w = [192,256,384,448,640]
+            if opt.refine_model == 'i':
+                mid_refine = networks.Iterative_Propagate(crop_h,crop_w)
+            else:
+                mid_refine = networks.Simple_Propagate(crop_h,crop_w)
+            mid_refine.load_state_dict(torch.load(renet_path))
+            mid_refine.cuda()
+            mid_refine.eval()
 
         pred_disps = []
+        gt = []
 
         print("-> Computing predictions with size {}x{}".format(
             encoder_dict['width'], encoder_dict['height']))
 
         with torch.no_grad():
             for data in dataloader:
+                gt.append(data["depth_gt"].cpu()[:,0].numpy())
                 input_color = data[("color", 0, 0)].cuda()
+                for key, ipt in data.items():
+                    data[key] = ipt.cuda()
+
 
                 if opt.post_process:
                     # Post-processed results require each image to have two forward passes
                     input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
 
                 output = depth_decoder(encoder(input_color))
+                output_disp = output[("disp", 0)]
 
-                pred_disp, _ = disp_to_depth(output[("disp", 0)], opt.min_depth, opt.max_depth)
+                if refine:
+                    disp_blur = output[("disp", 0)]
+                    features = output["disp_feature"]
+                    depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
+                    disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
+                    output = mid_refine(features,disp_blur, disp_part_gt,input_color,opt.refine_stage)
+                    final_stage = opt.refine_stage[-1]
+                    output_disp = output[("disp", final_stage)]
+                    
+                pred_disp, _ = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
+                
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
 
                 if opt.post_process:
@@ -123,6 +158,7 @@ def evaluate(opt):
                 pred_disps.append(pred_disp)
 
         pred_disps = np.concatenate(pred_disps)
+        gt = np.concatenate(gt)
 
     else:
         # Load predictions from file
@@ -162,9 +198,9 @@ def evaluate(opt):
         print("-> No ground truth is available for the KITTI benchmark, so not evaluating. Done.")
         quit()
 
-    gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
-
+    #gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
+    #gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
+    gt_depths = gt
     print("-> Evaluating")
 
     if opt.eval_stereo:
@@ -181,6 +217,7 @@ def evaluate(opt):
     for i in range(pred_disps.shape[0]):
 
         gt_depth = gt_depths[i]
+        gt_depth = cv2.resize(gt_depth, (1242, 375))
         gt_height, gt_width = gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
@@ -201,6 +238,10 @@ def evaluate(opt):
 
         pred_depth = pred_depth[mask]
         gt_depth = gt_depth[mask]
+
+        # mask2 = gt_depth < 80
+        # pred_depth = pred_depth[mask2]
+        # gt_depth = gt_depth[mask2]
 
         pred_depth *= opt.pred_depth_scale_factor
         if not opt.disable_median_scaling:
