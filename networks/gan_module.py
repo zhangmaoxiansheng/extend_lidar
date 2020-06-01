@@ -1,5 +1,5 @@
 import torch.nn as nn
-
+import numpy as np
 import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
@@ -119,20 +119,22 @@ class pix2pix_loss(nn.Module):
         f_i = 1
         GAN_loss_s = 0
         stage_weight_curr = self.stage_weight[s]
-        rand_scale = (2-0.5) * torch.rand(1).cuda() + 0.5
+        #rand_scale = (2-0.5) * torch.rand(1).cuda() + 0.5
+        rand_scale = (2-0.5) * np.random.rand(1) + 0.5
+        rand_scale = rand_scale[0]
         max_scale_num = 120 / torch.max(outputs[("depth",0,s)])
         min_scale_num = 1 / torch.min(outputs[("depth",0,s)])
         rand_scale_num = (max_scale_num-min_scale_num) * torch.rand(1).cuda() + min_scale_num
         #for f_i in self.frame:
         fake_dep = self.center_crop(outputs[("depth",0,s)],h,w) * rand_scale_num
-        fake_dep = F.interpolate(fake_dep, (h*rand_scale,w*rand_scale))
+        fake_dep = F.interpolate(fake_dep, (int(h*rand_scale),int(w*rand_scale)))
         
         #noise = torch.randn_like(fake_dep) * 5
         #fake_dep = fake_dep + noise
         
         #fake_dep += torch.randn_like(fake_dep).cuda() * 5
         fake_rgb = self.center_crop(outputs[("color",f_i,s)],h,w)
-        fake_rgb = F.interpolate(fake_rgb, (h*rand_scale,w*rand_scale))
+        fake_rgb = F.interpolate(fake_rgb, (int(h*rand_scale),int(w*rand_scale)))
 
         fake_rgb_cond = torch.cat((fake_rgb,fake_dep),1)
         
@@ -148,7 +150,7 @@ class pix2pix_loss(nn.Module):
         #for f_i in self.frame:
         real_rgb = self.center_crop(inputs[("color",f_i,s)],h,w) * rand_scale_num
         real_dep = outputs[("dense_gt")]
-        real_rgb_cond = F.interpolate(torch.cat((real_rgb,real_dep),1), (h*rand_scale, w*rand_scale))
+        real_rgb_cond = F.interpolate(torch.cat((real_rgb,real_dep),1), (int(h*rand_scale), int(w*rand_scale)))
         pred_real = self.netD(real_rgb_cond.detach())
         GAN_loss_s += self.criterionGAN(pred_real,True) * stage_weight_curr
         GAN_loss_s = GAN_loss_s

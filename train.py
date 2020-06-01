@@ -6,7 +6,7 @@
 
 from __future__ import absolute_import, division, print_function
 
-from trainer_cspn import Trainer
+from trainer_cspnall import Trainer
 from options import MonodepthOptions
 
 options = MonodepthOptions()

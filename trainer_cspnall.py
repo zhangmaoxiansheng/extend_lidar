@@ -24,7 +24,7 @@ from layers import *
 import datasets
 import networks
 import scipy.io as scio 
-from IPython import embed
+#from IPython import embed
 from PnP_pose import PnP
 import cv2
 cv2.setNumThreads(0)
@@ -74,7 +74,7 @@ class Trainer:
             if self.opt.refine_model == 's':
                 self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w)
             elif self.opt.refine_model == 'i':
-                self.models["mid_refine"] = networks.Iterative_Propagate(self.crop_h,self.crop_w)
+                self.models["mid_refine"] = networks.Iterative_Propagate_meta(self.crop_h,self.crop_w)
             self.models["mid_refine"].to(self.device)
             self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
             if self.gan:
@@ -222,7 +222,6 @@ class Trainer:
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
-        self.model_lr_scheduler.step()
 
         print("Training")
         self.set_train()
@@ -263,6 +262,7 @@ class Trainer:
 
             self.step += 1
             #print("one_batch_finished step{}".format(self.step))
+        self.model_lr_scheduler.step()
             
 
     def process_batch(self, inputs):

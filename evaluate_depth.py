@@ -122,9 +122,10 @@ def evaluate(opt):
 
         print("-> Computing predictions with size {}x{}".format(
             encoder_dict['width'], encoder_dict['height']))
-
+        batch_index = 0
         with torch.no_grad():
             for data in dataloader:
+                batch_index += 1
                 gt.append(data["depth_gt"].cpu()[:,0].numpy())
                 input_color = data[("color", 0, 0)].cuda()
                 for key, ipt in data.items():
@@ -150,15 +151,17 @@ def evaluate(opt):
                 pred_disp, _ = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
                 
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
+                #print("working {}".format(batch_index))
 
                 if opt.post_process:
                     N = pred_disp.shape[0] // 2
                     pred_disp = batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
 
                 pred_disps.append(pred_disp)
-
-        pred_disps = np.concatenate(pred_disps)
-        gt = np.concatenate(gt)
+        #print("done 0")
+        pred_disps = np.concatenate(pred_disps,axis=0)
+        gt = np.concatenate(gt,axis=0)
+        #print("done 1")
 
     else:
         # Load predictions from file
