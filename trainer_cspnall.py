@@ -39,6 +39,7 @@ class Trainer:
         self.ref_pose = options.ref_pose
         self.ref_pose
         self.with_pnp = options.pnp
+        self.crop_mode = options.crop_mode
         self.gan = options.gan
         self.edge_refine = options.edge_refine
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
@@ -72,9 +73,11 @@ class Trainer:
                 self.crop_h = [96,128,160,192]
                 self.crop_w = [192,256,384,640]
             if self.opt.refine_model == 's':
-                self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w)
+                self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w,self.crop_mode)
             elif self.opt.refine_model == 'i':
-                self.models["mid_refine"] = networks.Iterative_Propagate_meta(self.crop_h,self.crop_w)
+                self.models["mid_refine"] = networks.Iterative_Propagate(self.crop_h,self.crop_w,self.crop_mode)
+            elif self.opt.refine_model == 'id':
+                self.models["mid_refine"] = networks.Iterative_Propagate_deform(self.crop_h,self.crop_w,self.crop_mode)
             self.models["mid_refine"].to(self.device)
             self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
             if self.gan:
@@ -154,13 +157,13 @@ class Trainer:
 
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
+            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode)
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
+            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
@@ -297,7 +300,7 @@ class Trainer:
         for i in self.opt.frame_ids:
             origin_color = inputs[("color",i,0)].clone()
             for s in self.refine_stage:
-                inputs[("color",i,s)] = self.center_crop(origin_color,self.crop_h[s],self.crop_w[s])
+                inputs[("color",i,s)] = self.crop(origin_color,self.crop_h[s],self.crop_w[s])
         
         self.generate_images_pred(inputs, outputs)
         if self.loss_mask:
@@ -458,7 +461,7 @@ class Trainer:
                 outputs[("sample", frame_id, scale)],
                 padding_mode="border")
             for s in self.refine_stage:
-                outputs[("color_m", frame_id, s)] = self.center_crop(output_mask_img,self.crop_h[s],self.crop_w[s])
+                outputs[("color_m", frame_id, s)] = self.crop(output_mask_img,self.crop_h[s],self.crop_w[s])
 
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch.
@@ -542,29 +545,21 @@ class Trainer:
                 warning = torch.sum(torch.isnan(disp))
                 if warning:
                     print("nan in disppred")
-                disp_target = self.center_crop(outputs["blur_disp"],h,w)
+                disp_target = self.crop(outputs["blur_disp"],h,w)
 
                 target = inputs[("color", 0, scale)]
                 depth_pred = outputs[("depth", 0, scale)]
 
-                #depth_part_gt = self.center_crop(inputs["depth_gt_part"],h,w)
-                #mask = depth_part_gt>0
-                #outputs["depth_part_gt_{}".format(scale)] = depth_part_gt
-                #disp_part_gt = depth_to_disp(depth_part_gt,self.opt.min_depth,self.opt.max_depth)
-                disp_part_gt = self.center_crop(outputs["disp_gt_part"],h,w)
+                disp_part_gt = self.crop(outputs["disp_gt_part"],h,w)
                 mask = disp_part_gt > 0
-                #outputs["disp_part_gt_{}".format(scale)] = disp_part_gt
                 depth_loss = torch.abs(disp_pred[mask] - disp_part_gt[mask]).mean()
-                #scale_r = torch.median(disp_pred[mask]) / torch.median(disp_part_gt[mask])
-                #depth_scale_loss = torch.abs(1 - scale_r)
                 losses["loss/depth_{}".format(scale)] = depth_loss
-                #losses["loss/depth_s_{}".format(scale)] = depth_scale_loss
                 depth_loss = depth_loss
-                    
-                depth_l1_loss = torch.mean((disp - disp_target).abs())
-                depth_ssim_loss = self.ssim(disp, disp_target).mean()
-                depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15# + depth_scale_loss
-                losses["loss/depth_ssim{}".format(scale)] = depth_ssim_loss
+                if self.refine:   
+                    depth_l1_loss = torch.mean((disp - disp_target).abs())
+                    depth_ssim_loss = self.ssim(disp, disp_target).mean()
+                    depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15
+                    losses["loss/depth_ssim{}".format(scale)] = depth_ssim_loss
 
                 for frame_id in self.opt.frame_ids[1:]:
                     pred = outputs[("color", frame_id, scale)]
@@ -637,9 +632,6 @@ class Trainer:
                     loss += depth_loss
                 total_loss += loss * stage_weight[scale]
                 losses["loss/{}".format(scale)] = loss
-        
-        
-
         if not self.with_pnp:
             total_loss /= len(self.refine_stage)
         losses["loss"] = total_loss
@@ -816,15 +808,22 @@ class Trainer:
         # else:
         #     print("Cannot find Adam weights so Adam is randomly initialized")
     
-    def center_crop(self,image,h=160,w=320):
+    def crop(self,image,h=160,w=320):
         #mask = torch.zeros_like(image)
         origin_h = image.size(2)
         origin_w = image.size(3)
-        
-        h_start = max(int(round((origin_h-h)/2)),0)
-        h_end = min(h_start + h,origin_h)
-        w_start = max(int(round((origin_w-w)/2)),0)
-        w_end = min(w_start + w,origin_w)
-        output = image[:,:,h_start:h_end,w_start:w_end] 
+        if self.crop_mode=='c':
+            h_start = max(int(round((origin_h-h)/2)),0)
+            h_end = min(h_start + h,origin_h)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:h_end,w_start:w_end] 
+        elif self.crop_mode=='b':
+            origin_h = image.size(2)
+            origin_w = image.size(3)
+            h_start = max(int(round(origin_h-h)),0)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:,w_start:w_end] 
         #mask[:,:,h_start:h_end,w_start:w_end] = 1
         return output

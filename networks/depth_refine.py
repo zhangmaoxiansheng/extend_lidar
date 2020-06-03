@@ -10,7 +10,7 @@ from collections import OrderedDict
 from .resnet_encoder import ResnetEncoder,resnet_multiimage_input
 from .deform_conv import DeformConv
 class Simple_Propagate(nn.Module):
-    def __init__(self,crop_h,crop_w):
+    def __init__(self,crop_h,crop_w,mode='c'):
         super(Simple_Propagate, self).__init__()
         self.crop_h = crop_h#[96,128,160,192]
         self.crop_w = crop_w#[192,256,384,640]
@@ -37,17 +37,25 @@ class Simple_Propagate(nn.Module):
         self.models = nn.ModuleList([self.model_ref0,self.model_ref1,self.model_ref2,self.model_ref3])
         #self.sigmoid = nn.Sigmoid()
         #self.cspn = Affinity_Propagate()
+        self.crop_mode = mode
     
-    def center_crop(self,image,h=160,w=320):
+    def crop(self,image,h=160,w=320):
         #mask = torch.zeros_like(image)
         origin_h = image.size(2)
         origin_w = image.size(3)
-        
-        h_start = max(int(round((origin_h-h)/2)),0)
-        h_end = min(h_start + h,origin_h)
-        w_start = max(int(round((origin_w-w)/2)),0)
-        w_end = min(w_start + w,origin_w)
-        output = image[:,:,h_start:h_end,w_start:w_end] 
+        if self.crop_mode=='c' or self.crop_mode=='s':
+            h_start = max(int(round((origin_h-h)/2)),0)
+            h_end = min(h_start + h,origin_h)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:h_end,w_start:w_end] 
+        elif self.crop_mode=='b':
+            origin_h = image.size(2)
+            origin_w = image.size(3)
+            h_start = max(int(round(origin_h-h)),0)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:,w_start:w_end] 
         #mask[:,:,h_start:h_end,w_start:w_end] = 1
         return output
     #small feature 256 -> fuse small gt -> conv -> larger area -> next stage 
@@ -56,8 +64,8 @@ class Simple_Propagate(nn.Module):
         model = self.models[stage]
         h = self.crop_h[stage]
         w = self.crop_w[stage]
-        rgbd = self.center_crop(rgbd,h,w)
-        feature_crop = self.center_crop(features,h,w)
+        rgbd = self.crop(rgbd,h,w)
+        feature_crop = self.crop(features,h,w)
         #feature_crop = rgbd[:,1:,:,:]
         dep = rgbd[:,0,:,:].unsqueeze(1)
         mask = dep_last.sign()
@@ -107,7 +115,7 @@ class Simple_Propagate(nn.Module):
         gt_mask = gt.sign()
         blur_depth = gt_mask * gt + (1-gt_mask) * blur_depth_o
         rgbd = torch.cat((rgb, blur_depth_o),1)
-        dep_0 = self.center_crop(gt,self.crop_h[0],self.crop_w[0])
+        dep_0 = self.crop(gt,self.crop_h[0],self.crop_w[0])
 
         self.stage_block(features,rgbd,dep_0, stage, outputs)
         # final_dep = outputs[("disp",stage[-1])]
@@ -118,13 +126,13 @@ class Simple_Propagate(nn.Module):
         
         outputs["blur_disp"] = blur_depth_o
         outputs["disp_all_in"] = blur_depth
-        outputs["dense_gt"] = self.center_crop(blur_depth,64,128)
+        outputs["dense_gt"] = self.crop(blur_depth,64,128)
         outputs['scale'] = scale
         return outputs
 
 class Iterative_Propagate(Simple_Propagate):
-    def __init__(self,crop_h,crop_w):
-        super(Iterative_Propagate, self).__init__(crop_h, crop_w)
+    def __init__(self,crop_h,crop_w,mode='c'):
+        super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode='c')
         self.model_ref0 = nn.Sequential(ConvBlock(16+1,32),
                             ConvBlock(32,16),
                             ConvBlock(16,8),
@@ -149,14 +157,15 @@ class Iterative_Propagate(Simple_Propagate):
         if len(self.crop_h) > 4:
             self.models.append(self.model_ref4)
         self.propagate_time = 3
+        
     
     def stage_forward(self,features,rgbd,dep_last,stage):
         model = self.models[stage]
         h = self.crop_h[stage]
         w = self.crop_w[stage]
         #dep_last is the padded depth
-        rgbd = self.center_crop(rgbd,h,w)
-        feature_crop = self.center_crop(features,h,w)
+        rgbd = self.crop(rgbd,h,w)
+        feature_crop = self.crop(features,h,w)
         #feature_crop = rgbd[:,1:,:,:]
         dep = rgbd[:,0,:,:].unsqueeze(1)
         if torch.median(dep[dep_last>0]) > 0:
@@ -177,8 +186,8 @@ class Iterative_Propagate(Simple_Propagate):
         return dep, feature_stage
 
 class Iterative_Propagate_deep(Iterative_Propagate):
-    def __init__(self,crop_h,crop_w):
-        super(Iterative_Propagate, self).__init__(crop_h, crop_w)
+    def __init__(self,crop_h,crop_w,mode='c'):
+        super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode='c')
         self.model_ref0 = nn.Sequential(ConvBlock(16+1,32),
                             ConvBlock(32,64),
                             ConvBlock(64,32),
@@ -210,8 +219,8 @@ class Iterative_Propagate_deep(Iterative_Propagate):
         self.propagate_time = 3
 
 class Iterative_Propagate_meta(Iterative_Propagate):
-    def __init__(self,crop_h,crop_w):
-        super(Iterative_Propagate, self).__init__(crop_h, crop_w)
+    def __init__(self,crop_h,crop_w,mode='c'):
+        super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode='c')
         self.model_ref0_2 = nn.Sequential(ConvBlock(16+1,32),
                             ConvBlock(32,16),
                             ConvBlock(16,8),
@@ -233,8 +242,8 @@ class Iterative_Propagate_meta(Iterative_Propagate):
         h = self.crop_h[stage]
         w = self.crop_w[stage]
         #dep_last is the padded depth
-        rgbd = self.center_crop(rgbd,h,w)
-        feature_crop = self.center_crop(features,h,w)
+        rgbd = self.crop(rgbd,h,w)
+        feature_crop = self.crop(features,h,w)
         #feature_crop = rgbd[:,1:,:,:]
         dep = rgbd[:,0,:,:].unsqueeze(1)
         if torch.median(dep[dep_last>0]) > 0:
@@ -255,8 +264,8 @@ class Iterative_Propagate_meta(Iterative_Propagate):
         return dep, feature_stage
 
 class Iterative_Propagate_deform(Iterative_Propagate):
-    def __init__(self,crop_h,crop_w):
-        super(Iterative_Propagate_deform, self).__init__(crop_h, crop_w)
+    def __init__(self,crop_h,crop_w,mode='c'):
+        super(Iterative_Propagate_deform, self).__init__(crop_h, crop_w,mode='c')
         self.model_ref0 = nn.Sequential(ConvBlock(16+1,32),
                             ConvBlock(32,16),
                             Deformable_Conv(16,8),
@@ -300,8 +309,8 @@ class Deformable_Conv(nn.Module):
 
 
 class Iterative_Propagate_fc(Iterative_Propagate):
-    def __init__(self,crop_h,crop_w):
-        super(Iterative_Propagate_fc, self).__init__(crop_h, crop_w)
+    def __init__(self,crop_h,crop_w,mode='c'):
+        super(Iterative_Propagate_fc, self).__init__(crop_h, crop_w,mode='c')
         self.fc1 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[0]*crop_w[0]*2,8)])
         self.fc2 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[1]*crop_w[1]*2,8)])
         self.fc3 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[2]*crop_w[2]*2,8)])
@@ -323,8 +332,8 @@ class Iterative_Propagate_fc(Iterative_Propagate):
         fc_conv = fc_scale[0]
         fc_fully = fc_scale[1]
         #dep_last is the padded depth
-        rgbd = self.center_crop(rgbd,h,w)
-        feature_crop = self.center_crop(features,h,w)
+        rgbd = self.crop(rgbd,h,w)
+        feature_crop = self.crop(features,h,w)
         #feature_crop = rgbd[:,1:,:,:]
         dep = rgbd[:,0,:,:].unsqueeze(1)
         scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])

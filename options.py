@@ -113,6 +113,9 @@ class MonodepthOptions:
         self.parser.add_argument("--refine_model",
                                  type=str,
                                  default='s')
+        self.parser.add_argument("--crop_mode",
+                                 type=str,
+                                 default='c')
         
         
         # OPTIMIZATION options

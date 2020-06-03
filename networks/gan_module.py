@@ -66,7 +66,7 @@ class GANLoss(nn.Module):
         return loss
 
 class pix2pix_loss(nn.Module):
-    def __init__(self, opt_g, opt_d,netD, opt):
+    def __init__(self, opt_g, opt_d,netD, opt, mode='c'):
         super(pix2pix_loss, self).__init__()
         self.opt_g = opt_g
         self.opt_d = opt_d
@@ -79,6 +79,7 @@ class pix2pix_loss(nn.Module):
         self.stage_weight = [0.2,0.5,0.8,1]
         if len(self.refine_stage) > 4:
             self.stage_weight = [0.2,0.2,0.5,0.8,1]
+        self.crop_mode = mode
 
     @staticmethod
     def set_requires_grad(net, requires_grad=False):
@@ -126,14 +127,14 @@ class pix2pix_loss(nn.Module):
         min_scale_num = 1 / torch.min(outputs[("depth",0,s)])
         rand_scale_num = (max_scale_num-min_scale_num) * torch.rand(1).cuda() + min_scale_num
         #for f_i in self.frame:
-        fake_dep = self.center_crop(outputs[("depth",0,s)],h,w) * rand_scale_num
+        fake_dep = self.crop(outputs[("depth",0,s)],h,w) * rand_scale_num
         fake_dep = F.interpolate(fake_dep, (int(h*rand_scale),int(w*rand_scale)))
         
         #noise = torch.randn_like(fake_dep) * 5
         #fake_dep = fake_dep + noise
         
         #fake_dep += torch.randn_like(fake_dep).cuda() * 5
-        fake_rgb = self.center_crop(outputs[("color",f_i,s)],h,w)
+        fake_rgb = self.crop(outputs[("color",f_i,s)],h,w)
         fake_rgb = F.interpolate(fake_rgb, (int(h*rand_scale),int(w*rand_scale)))
 
         fake_rgb_cond = torch.cat((fake_rgb,fake_dep),1)
@@ -148,7 +149,7 @@ class pix2pix_loss(nn.Module):
         GAN_loss_s = 0
         stage_weight_curr = self.stage_weight[s]
         #for f_i in self.frame:
-        real_rgb = self.center_crop(inputs[("color",f_i,s)],h,w) * rand_scale_num
+        real_rgb = self.crop(inputs[("color",f_i,s)],h,w) * rand_scale_num
         real_dep = outputs[("dense_gt")]
         real_rgb_cond = F.interpolate(torch.cat((real_rgb,real_dep),1), (int(h*rand_scale), int(w*rand_scale)))
         pred_real = self.netD(real_rgb_cond.detach())
@@ -160,16 +161,23 @@ class pix2pix_loss(nn.Module):
         GAN_loss_D.backward()
         return losses
 
-    def center_crop(self,image,h=160,w=320):
+    def crop(self,image,h=160,w=320):
         #mask = torch.zeros_like(image)
         origin_h = image.size(2)
         origin_w = image.size(3)
-        
-        h_start = max(int(round((origin_h-h)/2)),0)
-        h_end = min(h_start + h,origin_h)
-        w_start = max(int(round((origin_w-w)/2)),0)
-        w_end = min(w_start + w,origin_w)
-        output = image[:,:,h_start:h_end,w_start:w_end] 
+        if self.crop_mode=='c' or self.crop_mode=='s':
+            h_start = max(int(round((origin_h-h)/2)),0)
+            h_end = min(h_start + h,origin_h)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:h_end,w_start:w_end] 
+        elif self.crop_mode=='b':
+            origin_h = image.size(2)
+            origin_w = image.size(3)
+            h_start = max(int(round(origin_h-h)),0)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:,w_start:w_end] 
         #mask[:,:,h_start:h_end,w_start:w_end] = 1
         return output
     

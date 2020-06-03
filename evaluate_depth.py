@@ -86,7 +86,7 @@ def evaluate(opt):
 
         dataset = datasets.KITTIDepthDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
-                                           [0], 4, is_train=False)
+                                           [0], 4, is_train=False, refine=opt.refine, crop_mode=opt.crop_mode)
         dataloader = DataLoader(dataset, 1, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
@@ -110,9 +110,13 @@ def evaluate(opt):
                 crop_h = [96,128,160,192,192]
                 crop_w = [192,256,384,448,640]
             if opt.refine_model == 'i':
-                mid_refine = networks.Iterative_Propagate(crop_h,crop_w)
+                #mid_refine = networks.Iterative_Propagate(crop_h,crop_w)
+                #mid_refine = networks.Iterative_Propagate_meta(crop_h,crop_w)
+                mid_refine = networks.Iterative_Propagate(crop_h,crop_w,opt.crop_mode)
+            elif opt.refine_model == 'id':
+                mid_refine = networks.Iterative_Propagate_deform(crop_h,crop_w,opt.crop_mode)
             else:
-                mid_refine = networks.Simple_Propagate(crop_h,crop_w)
+                mid_refine = networks.Simple_Propagate(crop_h,crop_w,opt.crop_mode)
             mid_refine.load_state_dict(torch.load(renet_path))
             mid_refine.cuda()
             mid_refine.eval()
@@ -264,8 +268,14 @@ def evaluate(opt):
 
     mean_errors = np.array(errors).mean(0)
 
-    print("\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
-    print(("&{: 8.3f}  " * 7).format(*mean_errors.tolist()) + "\\\\")
+    line1 = "\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3")
+    print(line1)
+    with open(os.path.join(opt.load_weights_folder,'res.txt'),'a') as f:
+        f.write(line1)
+    line2 = ("&{: 8.3f}  " * 7).format(*mean_errors.tolist()) + "\\\\"
+    print(line2)
+    with open(os.path.join(opt.load_weights_folder,'res.txt'),'a') as f:
+        f.write("\n"+line2)
     print("\n-> Done!")
 
 

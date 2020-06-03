@@ -47,9 +47,13 @@ class MonoDataset(data.Dataset):
                  frame_idxs,
                  num_scales,
                  is_train=False,
-                 img_ext='.png'):
+                 img_ext='.png',
+                 refine=True,
+                 crop_mode='c'):
         super(MonoDataset, self).__init__()
 
+        self.refine = refine
+        self.crop_mode = crop_mode
         self.data_path = data_path
         self.filenames = filenames
         self.height = height
@@ -186,7 +190,10 @@ class MonoDataset(data.Dataset):
             del inputs[("color_aug", i, -1)]
 
         if self.load_depth:
-            depth_gt = self.get_depth(folder, frame_index, side, do_flip)
+            if self.crop_mode == 's':
+                depth_gt = self.get_sparse_depth(folder, frame_index, side, do_flip)
+            else:
+                depth_gt = self.get_depth(folder, frame_index, side, do_flip)
             def center_crop(depth_image,h=160,w=320):
                 mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
                 origin_h = depth_image.shape[0]
@@ -194,10 +201,28 @@ class MonoDataset(data.Dataset):
                 mask[int(origin_h/2-h/2):int(origin_h/2+h/2),int(origin_w/2-w/2):int(origin_w/2+w/2)] = 1
                 kernel = np.ones((4, 4), np.uint8)
                 depth_curr_dilated = cv2.dilate(depth_image, kernel)
-                sparse_depth = depth_image * mask
-                #sparse_depth = depth_curr_dilated * mask
+                if self.refine:
+                    sparse_depth = depth_image * mask
+                else:
+                    sparse_depth = depth_curr_dilated * mask
                 return sparse_depth,mask
-            sp_depth,mask = center_crop(depth_gt)
+            def bottle_crop(depth_image,h=160,w=320):
+                mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
+                origin_h = depth_image.shape[0]
+                origin_w = depth_image.shape[1]
+                mask[int(origin_h-h):,int(origin_w/2-w/2):int(origin_w/2+w/2)] = 1
+                kernel = np.ones((4, 4), np.uint8)
+                depth_curr_dilated = cv2.dilate(depth_image, kernel)
+                if self.refine:
+                    sparse_depth = depth_image * mask
+                else:
+                    sparse_depth = depth_curr_dilated * mask
+                return sparse_depth,mask
+            if self.crop_mode=='c' or self.crop_mode=='s':
+                sp_depth,mask = center_crop(depth_gt)
+            elif self.crop_mode=='b':
+                sp_depth,mask = bottle_crop(depth_gt)
+
             kernel = np.ones((7,7),np.uint8)
             dilated_mask = cv2.dilate(mask,kernel)
             erode_mask = cv2.erode(mask,kernel)
@@ -227,4 +252,6 @@ class MonoDataset(data.Dataset):
         raise NotImplementedError
 
     def get_depth(self, folder, frame_index, side, do_flip):
+        raise NotImplementedError
+    def get_sparse_depth(self, folder, frame_index, side, do_flip):
         raise NotImplementedError

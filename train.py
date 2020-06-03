@@ -6,11 +6,15 @@
 
 from __future__ import absolute_import, division, print_function
 
-from trainer_cspnall import Trainer
+
 from options import MonodepthOptions
 
 options = MonodepthOptions()
 opts = options.parse()
+if opts.refine:
+    from trainer_cspnall import Trainer
+else:
+    from trainer_dep import Trainer
 
 
 if __name__ == "__main__":
