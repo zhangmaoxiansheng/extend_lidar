@@ -43,7 +43,7 @@ class Simple_Propagate(nn.Module):
         #mask = torch.zeros_like(image)
         origin_h = image.size(2)
         origin_w = image.size(3)
-        if self.crop_mode=='c' or self.crop_mode=='s':
+        if self.crop_mode=='c' or self.crop_mode=='s' or self.crop_mode=='r':
             h_start = max(int(round((origin_h-h)/2)),0)
             h_end = min(h_start + h,origin_h)
             w_start = max(int(round((origin_w-w)/2)),0)
