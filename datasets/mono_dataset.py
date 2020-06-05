@@ -166,16 +166,31 @@ class MonoDataset(data.Dataset):
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
 
         # adjusting intrinsics to match each scale in the pyramid
-        for scale in range(self.num_scales):
-            K = self.K.copy()
+        self.crop_h = [96,128,160,192,192]
+        self.crop_w = [192,256,384,448,640]
+        if self.refine:
+            for scale in range(5):
+                K = self.K.copy()
 
-            K[0, :] *= self.width // (2 ** scale)
-            K[1, :] *= self.height // (2 ** scale)
+                K[0, 0] *= self.width
+                K[1, 1] *= self.height
+                K[0, 2] *= self.crop_w[scale]
+                K[1, 2] *= self.crop_h[scale]
 
-            inv_K = np.linalg.pinv(K)
+                inv_K = np.linalg.pinv(K)
+                inputs[("K", scale)] = torch.from_numpy(K)
+                inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
+        else:    
+            for scale in range(self.num_scales):
+                K = self.K.copy()
 
-            inputs[("K", scale)] = torch.from_numpy(K)
-            inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
+                K[0, :] *= self.width // (2 ** scale)
+                K[1, :] *= self.height // (2 ** scale)
+
+                inv_K = np.linalg.pinv(K)
+
+                inputs[("K", scale)] = torch.from_numpy(K)
+                inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
         if do_color_aug:
             color_aug = transforms.ColorJitter.get_params(
@@ -211,32 +226,39 @@ class MonoDataset(data.Dataset):
                     sparse_depth = depth_image * mask
                 else:
                     sparse_depth = depth_curr_dilated * mask
-                return sparse_depth,mask
+                start_point = [h_start,w_start]
+                return sparse_depth,start_point
 
             def center_crop(depth_image,h=160,w=320):
                 mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
                 origin_h = depth_image.shape[0]
                 origin_w = depth_image.shape[1]
-                mask[int(origin_h/2-h/2):int(origin_h/2+h/2),int(origin_w/2-w/2):int(origin_w/2+w/2)] = 1
+                h_start = int(origin_h/2-h/2)
+                w_start = int(origin_w/2-w/2)
+                mask[h_start:h_start+h,w_start:w_start+w] = 1
                 kernel = np.ones((4, 4), np.uint8)
                 depth_curr_dilated = cv2.dilate(depth_image, kernel)
                 if self.refine:
                     sparse_depth = depth_image * mask
                 else:
                     sparse_depth = depth_curr_dilated * mask
+                start_point = [h_start,w_start]
                 return sparse_depth,mask
             def bottle_crop(depth_image,h=160,w=320):
                 mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
                 origin_h = depth_image.shape[0]
                 origin_w = depth_image.shape[1]
-                mask[int(origin_h-h):,int(origin_w/2-w/2):int(origin_w/2+w/2)] = 1
+                h_start = int(origin_h-h)
+                w_start = int(origin_w/2-w/2)
+                mask[h_start:,w_start:w_start+w] = 1
                 kernel = np.ones((4, 4), np.uint8)
                 depth_curr_dilated = cv2.dilate(depth_image, kernel)
                 if self.refine:
                     sparse_depth = depth_image * mask
                 else:
                     sparse_depth = depth_curr_dilated * mask
-                return sparse_depth,mask
+                start_point = [h_start,w_start]
+                return sparse_depth,start_point
             if self.crop_mode=='c' or self.crop_mode=='s':
                 sp_depth,mask = center_crop(depth_gt)
             elif self.crop_mode=='b':
@@ -244,14 +266,14 @@ class MonoDataset(data.Dataset):
             elif self.crop_mode=='r':
                 sp_depth,mask = random_crop(depth_gt)
 
-            kernel = np.ones((7,7),np.uint8)
-            dilated_mask = cv2.dilate(mask,kernel)
-            erode_mask = cv2.erode(mask,kernel)
-            mask_edge = dilated_mask - erode_mask
+            # kernel = np.ones((7,7),np.uint8)
+            # #dilated_mask = cv2.dilate(mask,kernel)
+            # erode_mask = cv2.erode(mask,kernel)
+            # mask_edge = dilated_mask - erode_mask
 
             inputs["depth_gt_part"] = torch.from_numpy(sp_depth).unsqueeze(0)
             #inputs["mask"] = torch.from_numpy(mask).unsqueeze(0)
-            inputs["mask_edge"] = torch.from_numpy(mask_edge).unsqueeze(0)
+            #inputs["mask_edge"] = torch.from_numpy(mask_edge).unsqueeze(0)
             inputs["depth_gt"] = np.expand_dims(depth_gt, 0)
             inputs["depth_gt"] = torch.from_numpy(inputs["depth_gt"].astype(np.float32))
             

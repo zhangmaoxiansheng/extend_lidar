@@ -76,12 +76,20 @@ class Simple_Propagate(nn.Module):
         return x, feature_stage
     
     def stage_pad(self,depth,h,w):
-        hs = depth.size(2)
-        ws = depth.size(3)
-        pad_w = (w-ws) // 2
-        pad_h= (h-hs) // 2
-        pad = nn.ZeroPad2d((pad_w,pad_w,pad_h,pad_h))
-        depth_pad = pad(depth)
+        if self.crop_mode == 'b':
+            hs = depth.size(2)
+            ws = depth.size(3)
+            pad_w = (w-ws) // 2
+            pad_h= h-hs
+            pad = nn.ZeroPad2d((pad_w,pad_w,pad_h,0))
+            depth_pad = pad(depth)
+        else:
+            hs = depth.size(2)
+            ws = depth.size(3)
+            pad_w = (w-ws) // 2
+            pad_h= (h-hs) // 2
+            pad = nn.ZeroPad2d((pad_w,pad_w,pad_h,pad_h))
+            depth_pad = pad(depth)
         return depth_pad
 
     def stage_block(self,features,rgbd,dep_last,stage,outputs):
@@ -126,7 +134,11 @@ class Simple_Propagate(nn.Module):
         
         outputs["blur_disp"] = blur_depth_o
         outputs["disp_all_in"] = blur_depth
-        outputs["dense_gt"] = self.crop(blur_depth,64,128)
+        if self.crop_mode == 'b':
+            #outputs["dense_gt"] = self.crop(blur_depth,72,164)
+            outputs["dense_gt"] = self.crop(blur_depth,128,164)
+        else:
+            outputs["dense_gt"] = self.crop(blur_depth,64,128)
         outputs['scale'] = scale
         return outputs
 

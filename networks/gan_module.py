@@ -123,7 +123,7 @@ class pix2pix_loss(nn.Module):
         #rand_scale = (2-0.5) * torch.rand(1).cuda() + 0.5
         rand_scale = (2-0.5) * np.random.rand(1) + 0.5
         rand_scale = rand_scale[0]
-        max_scale_num = 120 / torch.max(outputs[("depth",0,s)])
+        max_scale_num = 1 / torch.max(outputs[("depth",0,s)])
         min_scale_num = 1 / torch.min(outputs[("depth",0,s)])
         rand_scale_num = (max_scale_num-min_scale_num) * torch.rand(1).cuda() + min_scale_num
         #for f_i in self.frame:
@@ -178,7 +178,7 @@ class pix2pix_loss(nn.Module):
             w_start = max(int(round((origin_w-w)/2)),0)
             w_end = min(w_start + w,origin_w)
             output = image[:,:,h_start:,w_start:w_end] 
-        #mask[:,:,h_start:h_end,w_start:w_end] = 1
+        
         return output
     
     def forward(self,inputs,outputs,losses,epoch):
