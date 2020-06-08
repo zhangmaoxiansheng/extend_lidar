@@ -174,8 +174,12 @@ class MonoDataset(data.Dataset):
 
                 K[0, 0] *= self.width
                 K[1, 1] *= self.height
-                K[0, 2] *= self.crop_w[scale]
-                K[1, 2] *= self.crop_h[scale]
+                if self.crop_mode == 'b':
+                    K[0, 2] *= self.crop_w[scale]
+                    K[1, 2] = self.crop_h[scale] - 0.5*self.height
+                else:
+                    K[0, 2] *= self.crop_w[scale]
+                    K[1, 2] *= self.crop_h[scale]
 
                 inv_K = np.linalg.pinv(K)
                 inputs[("K", scale)] = torch.from_numpy(K)

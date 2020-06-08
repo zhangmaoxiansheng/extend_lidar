@@ -132,7 +132,7 @@ class Trainer:
             self.D_optimizer = optim.Adam(self.parameters_D, 1e-3)
             self.model_lr_scheduler_D = optim.lr_scheduler.StepLR(
             self.D_optimizer, self.opt.scheduler_step_size, 0.1)
-            self.pix2pix = networks.pix2pix_loss(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt)
+            self.pix2pix = networks.pix2pix_loss(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, mode=self.crop_mode)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()

@@ -78,7 +78,8 @@ class pix2pix_loss(nn.Module):
 
         self.stage_weight = [0.2,0.5,0.8,1]
         if len(self.refine_stage) > 4:
-            self.stage_weight = [0.2,0.2,0.5,0.8,1]
+            #self.stage_weight = [0.2,0.2,0.5,0.8,1]
+            self.stage_weight = [0.2,0.2,0.1,0.1,0.1]
         self.crop_mode = mode
 
     @staticmethod
@@ -183,12 +184,14 @@ class pix2pix_loss(nn.Module):
     
     def forward(self,inputs,outputs,losses,epoch):
         #D:
+        self.D_update = 0
         #if epoch < 30:
         outputs["D_update"] = True
         self.set_requires_grad(self.netD, True)  # enable backprop for D
         self.opt_d.zero_grad()     # set D's gradients to zero
         losses.update(self.backward_D(inputs, outputs,losses))              # calculate gradients for D
-        self.opt_d.step()          # update D's weights
+        self.opt_d.step()
+        self.D_update += 1          # update D's weights
         # else:
         #     outputs["D_update"] = False
 
@@ -202,6 +205,50 @@ class pix2pix_loss(nn.Module):
         else:
             outputs["G_update"] = False
 
+class pix2pix_loss_iter(pix2pix_loss):
+    def __init__(self, opt_g, opt_d, netD, opt, crop_h, crop_w, mode='c'):
+        super().__init__(opt_g, opt_d, netD, opt, mode=mode)
+        self.crop_h = crop_h
+        self.crop_w = crop_w
+    def backward_D(self,inputs, outputs,losses):
+        self.GAN_loss = 0
+        #D_stage = list(range(len(self.crop_h)))
 
+        for s in self.refine_stage:
+            if s == 0:
+                gt = outputs[("dense_gt")]
+            else:
+                gt = outputs[("depth",0,s-1)]
+            h = gt.shape[2]
+            w = gt.shape[3]
+            gt_rgb = self.crop(inputs[("color",1,s)])
+            gt_rgbd = torch.cat((gt_rgb,gt),1)
+
+            fake_dep = self.crop(outputs[("depth",0,s)],h,w)
+            fake_rgb = self.crop(outputs[("color",1,s)],h,w)
+            fake_rgbd = torch.cat((fake_rgb,fake_dep),1)
+
+            rand_scale = (1.2-0.8) * np.random.rand(1) + 0.8
+            rand_scale = rand_scale[0]
+            max_scale_num = 1 / torch.max(outputs[("depth",0,s)])
+            min_scale_num = 1 / torch.min(outputs[("depth",0,s)])
+            rand_scale_num = (max_scale_num-min_scale_num) * torch.rand(1).cuda() + min_scale_num
+
+            gt_rgbd *= rand_scale_num
+            fake_rgbd *= rand_scale_num
+            gt_rgbd = F.interpolate(gt_rgbd, (int(h*rand_scale),int(w*rand_scale)))
+            fake_rgbd = F.interpolate(fake_rgbd, (int(h*rand_scale),int(w*rand_scale)))
+
+            stage_weight_curr = self.stage_weight[s]
+
+            pred_fake = self.netD(fake_rgbd.detach())
+            self.GAN_loss += self.criterionGAN(pred_fake,False) * stage_weight_curr
+    
+            pred_real = self.netD(gt_rgbd.detach())
+            self.GAN_loss += self.criterionGAN(pred_real,True) * stage_weight_curr
+        self.GAN_loss /= 2
+        losses["loss/D_total"] = self.GAN_loss
+        self.GAN_loss.backward()
+        return losses
 
 
