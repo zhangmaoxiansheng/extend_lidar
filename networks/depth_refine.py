@@ -124,7 +124,7 @@ class Simple_Propagate(nn.Module):
         blur_depth = gt_mask * gt + (1-gt_mask) * blur_depth_o
         rgbd = torch.cat((rgb, blur_depth_o),1)
         dep_0 = self.crop(gt,self.crop_h[0],self.crop_w[0])
-
+        
         self.stage_block(features,rgbd,dep_0, stage, outputs)
         # final_dep = outputs[("disp",stage[-1])]
         # if we use 
@@ -143,8 +143,8 @@ class Simple_Propagate(nn.Module):
         return outputs
 
 class Iterative_Propagate(Simple_Propagate):
-    def __init__(self,crop_h,crop_w,mode='c'):
-        super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode='c')
+    def __init__(self,crop_h,crop_w,mode):
+        super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode)
         self.model_ref0 = nn.Sequential(ConvBlock(16+1,32),
                             ConvBlock(32,16),
                             ConvBlock(16,8),
