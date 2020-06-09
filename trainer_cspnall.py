@@ -129,7 +129,7 @@ class Trainer:
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
 
         if self.gan:
-            self.D_optimizer = optim.Adam(self.parameters_D, 1e-3)
+            self.D_optimizer = optim.Adam(self.parameters_D, 1e-4)
             self.model_lr_scheduler_D = optim.lr_scheduler.StepLR(
             self.D_optimizer, self.opt.scheduler_step_size, 0.1)
             self.pix2pix = networks.pix2pix_loss(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, mode=self.crop_mode)
@@ -248,7 +248,7 @@ class Trainer:
             early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000
             late_phase = self.step % 2000 == 0
 
-            if self.epoch <= 10 and self.gan and batch_idx % self.opt.log_frequency :
+            if self.epoch <= 30 and self.gan and batch_idx % self.opt.log_frequency :
                 if outputs["D_update"]:
                     self.log_time(batch_idx, duration, losses["loss/D_total"].cpu().data)
                 if outputs["G_update"]:
