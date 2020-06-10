@@ -41,6 +41,7 @@ class Trainer:
         self.with_pnp = options.pnp
         self.crop_mode = options.crop_mode
         self.gan = options.gan
+        self.gan2 = options.gan2
         self.edge_refine = options.edge_refine
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
 
@@ -82,6 +83,11 @@ class Trainer:
             self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
             if self.gan:
                 self.models["netD"] = networks.Discriminator()
+                #self.models["netD"] = networks.Discriminator_deep()
+                self.models["netD"].to(self.device)
+                self.parameters_D = list(self.models["netD"].parameters())
+            if self.gan2:
+                self.models["netD"] = networks.Discriminator_group()
                 #self.models["netD"] = networks.Discriminator_deep()
                 self.models["netD"].to(self.device)
                 self.parameters_D = list(self.models["netD"].parameters())
@@ -128,11 +134,14 @@ class Trainer:
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
 
-        if self.gan:
+        if self.gan or self.gan2:
             self.D_optimizer = optim.Adam(self.parameters_D, 1e-4)
             self.model_lr_scheduler_D = optim.lr_scheduler.StepLR(
             self.D_optimizer, self.opt.scheduler_step_size, 0.1)
-            self.pix2pix = networks.pix2pix_loss(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, mode=self.crop_mode)
+            if self.gan:
+                self.pix2pix = networks.pix2pix_loss_iter(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
+            else:
+                self.pix2pix = networks.pix2pix_loss_iter2(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
@@ -235,7 +244,7 @@ class Trainer:
 
             outputs, losses = self.process_batch(inputs)
             
-            if self.gan:
+            if self.gan or self.gan2:
                 self.pix2pix(inputs, outputs, losses, self.epoch)
             else:
                 self.model_optimizer.zero_grad()
@@ -248,15 +257,15 @@ class Trainer:
             early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000
             late_phase = self.step % 2000 == 0
 
-            if self.epoch <= 30 and self.gan and batch_idx % self.opt.log_frequency :
+            if (self.gan or self.gan2) and batch_idx % self.opt.log_frequency :
                 if outputs["D_update"]:
                     self.log_time(batch_idx, duration, losses["loss/D_total"].cpu().data)
                 if outputs["G_update"]:
                     self.log_time(batch_idx, duration, losses["loss/G_total"].cpu().data)
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+            self.log_time(batch_idx, duration, losses["loss"].cpu().data)
 
             if early_phase or late_phase:
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+                #self.log_time(batch_idx, duration, losses["loss"].cpu().data)
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
 
@@ -287,7 +296,7 @@ class Trainer:
             features = None
             inputs["depth_gt_part"] = F.interpolate(inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
             disp_part_gt = depth_to_disp(inputs["depth_gt_part"] ,self.opt.min_depth,self.opt.max_depth)
-            if self.gan and self.epoch % 2 != 0:
+            if (self.gan or self.gan2) and self.epoch % 2 != 0 and self.epoch > self.pix2pix.start_gan:
                 with torch.no_grad():
                     outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             else:

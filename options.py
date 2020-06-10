@@ -116,7 +116,9 @@ class MonodepthOptions:
         self.parser.add_argument("--crop_mode",
                                  type=str,
                                  default='c')
-        
+        self.parser.add_argument("--gan2",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
         
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
