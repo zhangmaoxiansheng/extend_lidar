@@ -8,6 +8,7 @@ from layers import *
 import torchvision.models as models
 from collections import OrderedDict
 from .resnet_encoder import ResnetEncoder,resnet_multiimage_input
+import numpy as np
 # from .deform_conv import DeformConv
 class Simple_Propagate(nn.Module):
     def __init__(self,crop_h,crop_w,mode='c'):
@@ -100,6 +101,7 @@ class Simple_Propagate(nn.Module):
                 #with torch.no_grad():
                 outputs[("disp",i)], outputs[("condition",i)] = self.stage_forward(features,rgbd,dep_last,i)
                 dep_last = self.stage_pad(outputs[("disp",i)],self.crop_h[i+1],self.crop_w[i+1])
+
         return outputs
     def scale_adjust(self,gt,dep):
         if torch.median(dep[gt>0])>0:
@@ -124,9 +126,9 @@ class Simple_Propagate(nn.Module):
         blur_depth = gt_mask * gt + (1-gt_mask) * blur_depth_o
         rgbd = torch.cat((rgb, blur_depth_o),1)
         dep_0 = self.crop(gt,self.crop_h[0],self.crop_w[0])
-        #if self.crop_mode == 'b':
-        # for ind,(h,w) in enumerate(zip(self.crop_h,self.crop_w)):
-        #     outputs[("disp",ind)] = self.crop(blur_depth,h,w)
+        # if self.crop_mode == 'b':
+        #     for ind,(h,w) in enumerate(zip(self.crop_h,self.crop_w)):
+        #         outputs[("disp",ind)] = self.crop(blur_depth,h,w)
         # else:
         self.stage_block(features,rgbd,dep_0, stage, outputs)
         

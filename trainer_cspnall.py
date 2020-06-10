@@ -638,8 +638,11 @@ class Trainer:
                 #     loss += self.opt.disparity_smoothness * smooth_loss
                 # else:
                 loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
-                if not self.ref_pose:
+                if self.crop_mode == 'b':
+                    loss = depth_loss
+                else:    
                     loss += depth_loss
+
                 total_loss += loss * stage_weight[scale]
                 losses["loss/{}".format(scale)] = loss
         if not self.with_pnp:
@@ -819,7 +822,6 @@ class Trainer:
         #     print("Cannot find Adam weights so Adam is randomly initialized")
     
     def crop(self,image,h=160,w=320):
-        #mask = torch.zeros_like(image)
         origin_h = image.size(2)
         origin_w = image.size(3)
         if self.crop_mode=='c' or self.crop_mode=='s' or self.crop_mode=='r':
@@ -835,5 +837,4 @@ class Trainer:
             w_start = max(int(round((origin_w-w)/2)),0)
             w_end = min(w_start + w,origin_w)
             output = image[:,:,h_start:,w_start:w_end] 
-        #mask[:,:,h_start:h_end,w_start:w_end] = 1
         return output

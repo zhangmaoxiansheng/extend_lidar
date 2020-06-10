@@ -31,7 +31,7 @@ class Discriminator_group(nn.Module):
     def __init__(self):
         super().__init__()
         self.models = nn.ModuleList([Discriminator(), Discriminator(),Discriminator(),Discriminator(),Discriminator()])
-    def forward(sefl,x,ind):
+    def forward(self,x,ind):
         x = self.models[ind](x)
         return x
 
@@ -70,7 +70,7 @@ class pix2pix_loss(nn.Module):
         self.stage_weight = [0.2,0.5,0.8,1]
         if len(self.refine_stage) > 4:
             #self.stage_weight = [0.2,0.2,0.5,0.8,1]
-            self.stage_weight = [0.2,0.2,0.1,0.1,0.1]
+            self.stage_weight = [0.1,0.1,0.1,0.3,0.5]
         self.crop_mode = mode
         self.D_update = 0
 
@@ -191,7 +191,7 @@ class pix2pix_loss(nn.Module):
 
         # update G
         else:
-            if epoch> self.start_gan:
+            if epoch > self.start_gan:
                 outputs["G_update"] = True
             else:
                 outputs["G_update"] = False
@@ -268,7 +268,7 @@ class pix2pix_loss_iter2(pix2pix_loss):
                 gt = outputs[("depth",0,s-1)]
             h = gt.shape[2]
             w = gt.shape[3]
-            gt_rgb = self.crop(inputs[("color",1,s)])
+            gt_rgb = self.crop(inputs[("color",1,s)],h,w)
             gt_rgbd = torch.cat((gt_rgb,gt),1)
 
             fake_dep = self.crop(outputs[("depth",0,s)],h,w)
