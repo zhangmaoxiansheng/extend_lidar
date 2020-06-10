@@ -76,8 +76,8 @@ class Trainer:
                 self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w,self.crop_mode)
             elif self.opt.refine_model == 'i':
                 self.models["mid_refine"] = networks.Iterative_Propagate(self.crop_h,self.crop_w,self.crop_mode)
-            elif self.opt.refine_model == 'id':
-                self.models["mid_refine"] = networks.Iterative_Propagate_deform(self.crop_h,self.crop_w,self.crop_mode)
+            # elif self.opt.refine_model == 'id':
+            #     self.models["mid_refine"] = networks.Iterative_Propagate_deform(self.crop_h,self.crop_w,self.crop_mode)
             self.models["mid_refine"].to(self.device)
             self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
             if self.gan:
@@ -515,6 +515,7 @@ class Trainer:
         stage_weight = [1,1,1.5,2]
         if len(self.refine_stage) > 4:
             stage_weight = [1,1,1.2,1.2,1.5]
+            #stage_weight = [0.25,0.5,0.8,1,1.5]
 
         if self.ref_pose and self.with_pnp:
             T_loss = 0

@@ -94,21 +94,22 @@ class pix2pix_loss(nn.Module):
         #fake predout wapred RGB
         #GT           crop RGB
         GAN_loss_total = 0
-        for s in self.refine_stage:
-            GAN_loss_s = 0
-            stage_weight_curr = self.stage_weight[s]
-            for f_i in self.frame:
-                #condition = outputs[("condition",s)]
-                dep = outputs[("depth",0,s)]
-                rgb = outputs[("color",f_i,s)]
-                fake_rgb_cond = torch.cat((rgb,dep),1)
-                pred_fake = self.netD(fake_rgb_cond)
-                GAN_loss_s += self.criterionGAN(pred_fake,True) * stage_weight_curr
-            GAN_loss_s = GAN_loss_s
-            GAN_loss_total += GAN_loss_s
-            losses["loss/G_{}".format(s)] = GAN_loss_total 
-        losses["loss/G_total"] = GAN_loss_total / len(self.refine_stage)
-        losses["loss"] += losses["loss/G_total"] * 0.05
+        if self.epoch > 0:
+            for s in self.refine_stage:
+                GAN_loss_s = 0
+                stage_weight_curr = self.stage_weight[s]
+                for f_i in self.frame:
+                    #condition = outputs[("condition",s)]
+                    dep = outputs[("depth",0,s)]
+                    rgb = outputs[("color",f_i,s)]
+                    fake_rgb_cond = torch.cat((rgb,dep),1)
+                    pred_fake = self.netD(fake_rgb_cond)
+                    GAN_loss_s += self.criterionGAN(pred_fake,True) * stage_weight_curr
+                GAN_loss_s = GAN_loss_s
+                GAN_loss_total += GAN_loss_s
+                losses["loss/G_{}".format(s)] = GAN_loss_total 
+            losses["loss/G_total"] = GAN_loss_total / len(self.refine_stage)
+            losses["loss"] += losses["loss/G_total"] * 0.05
         losses["loss"].backward()
         return losses
     
@@ -187,54 +188,36 @@ class pix2pix_loss(nn.Module):
         #D:
         self.epoch = epoch
         #if epoch < 30:
-        outputs["D_update"] = True
-        self.set_requires_grad(self.netD, True)  # enable backprop for D
-        self.opt_d.zero_grad()     # set D's gradients to zero
-        losses.update(self.backward_D(inputs, outputs,losses))              # calculate gradients for D
-        self.opt_d.step()
-        self.D_update += 1          # update D's weights
-        # else:
-        #     outputs["D_update"] = False
+        if epoch % 2 != 0:
+            outputs["D_update"] = True
+            outputs["G_update"] = False
+            self.set_requires_grad(self.netD, True)  # enable backprop for D
+            self.opt_d.zero_grad()     # set D's gradients to zero
+            losses.update(self.backward_D(inputs, outputs,losses))              # calculate gradients for D
+            self.opt_d.step()
+            self.D_update += 1          # update D's weights
+            # else:
+            #     outputs["D_update"] = False
 
         # update G
-        if epoch%2 == 0:
-            outputs["G_update"] = True
+        else:
+            if epoch>0:
+                outputs["G_update"] = True
+            else:
+                outputs["G_update"] = False
+            outputs["D_update"] = False
             self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
             self.opt_g.zero_grad()        # set G's gradients to zero
             losses.update(self.backward_G(inputs, outputs,losses))                   # calculate graidents for G
             self.opt_g.step()             # udpate G's weights
-        else:
-            outputs["G_update"] = False
+
 
 class pix2pix_loss_iter(pix2pix_loss):
     def __init__(self, opt_g, opt_d, netD, opt, crop_h, crop_w, mode='c'):
         super().__init__(opt_g, opt_d, netD, opt, mode=mode)
         self.crop_h = crop_h
         self.crop_w = crop_w
-    def backward_G(self,inputs, outputs,losses):
-        #step 1 fool the discriminator  try to make D(G(a)) -> 1
-        #conditions: fused depth and RGB features
-        #fake predout wapred RGB
-        #GT           crop RGB
-        GAN_loss_total = 0
-        if self.epoch > 0:
-            for s in self.refine_stage:
-                GAN_loss_s = 0
-                stage_weight_curr = self.stage_weight[s]
-                for f_i in self.frame:
-                    #condition = outputs[("condition",s)]
-                    dep = outputs[("depth",0,s)]
-                    rgb = outputs[("color",f_i,s)]
-                    fake_rgb_cond = torch.cat((rgb,dep),1)
-                    pred_fake = self.netD(fake_rgb_cond)
-                    GAN_loss_s += self.criterionGAN(pred_fake,True) * stage_weight_curr
-                GAN_loss_s = GAN_loss_s
-                GAN_loss_total += GAN_loss_s
-                losses["loss/G_{}".format(s)] = GAN_loss_total 
-            losses["loss/G_total"] = GAN_loss_total / len(self.refine_stage)
-            losses["loss"] += losses["loss/G_total"] * 0.05
-        losses["loss"].backward()
-        return losses
+    
     
     def backward_D(self,inputs, outputs,losses):
         self.GAN_loss = 0
