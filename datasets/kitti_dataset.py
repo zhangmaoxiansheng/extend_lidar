@@ -141,16 +141,16 @@ class KITTIDepthDataset(KITTIDataset):
         folder = folder[11:]
         depth_path = os.path.join(
             self.data_path,
-            'kitti_depth','train',
+            'kitti_depth_sparse','train',
             folder,
-            "proj_depth/groundtruth/image_0{}".format(self.side_map[side]),
+            "proj_depth/velodyne_raw/image_0{}".format(self.side_map[side]),
             f_str)
         if not os.path.exists(depth_path):
             depth_path = os.path.join(
             self.data_path,
-            'kitti_depth','val',
+            'kitti_depth_sparse','val',
             folder,
-            "proj_depth/groundtruth/image_0{}".format(self.side_map[side]),
+            "proj_depth/velodyne_raw/image_0{}".format(self.side_map[side]),
             f_str)
         depth_gt = pil.open(depth_path)
         depth_gt = depth_gt.resize(self.full_res_shape, pil.NEAREST)
