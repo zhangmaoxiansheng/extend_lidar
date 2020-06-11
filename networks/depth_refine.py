@@ -68,7 +68,7 @@ class Simple_Propagate(nn.Module):
         rgbd = self.crop(rgbd,h,w)
         feature_crop = self.crop(features,h,w)
         #feature_crop = rgbd[:,1:,:,:]
-        dep = rgbd[:,0,:,:].unsqueeze(1)
+        dep = rgbd[:,3,:,:].unsqueeze(1)
         mask = dep_last.sign()
         dep_fusion = dep_last * mask + dep * (1-mask) 
         feature_stage = torch.cat((feature_crop,dep_fusion),1)
@@ -101,6 +101,7 @@ class Simple_Propagate(nn.Module):
                 #with torch.no_grad():
                 outputs[("disp",i)], outputs[("condition",i)] = self.stage_forward(features,rgbd,dep_last,i)
                 dep_last = self.stage_pad(outputs[("disp",i)],self.crop_h[i+1],self.crop_w[i+1])
+                #outputs[("dep_last",i)] = dep_last
 
         return outputs
     def scale_adjust(self,gt,dep):
@@ -179,7 +180,7 @@ class Iterative_Propagate(Simple_Propagate):
         rgbd = self.crop(rgbd,h,w)
         feature_crop = self.crop(features,h,w)
         #feature_crop = rgbd[:,1:,:,:]
-        dep = rgbd[:,0,:,:].unsqueeze(1)
+        dep = rgbd[:,3,:,:].unsqueeze(1)
         if torch.median(dep[dep_last>0]) > 0:
             scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
         else:
