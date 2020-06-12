@@ -49,7 +49,9 @@ class MonoDataset(data.Dataset):
                  is_train=False,
                  img_ext='.png',
                  refine=True,
-                 crop_mode='c'):
+                 crop_mode='c',
+                 crop_h = None,
+                 crop_w = None):
         super(MonoDataset, self).__init__()
 
         self.refine = refine
@@ -68,6 +70,11 @@ class MonoDataset(data.Dataset):
 
         self.loader = pil_loader
         self.to_tensor = transforms.ToTensor()
+
+        # self.crop_h = [96,128,160,192,192]
+        # self.crop_w = [192,256,384,448,640]
+        self.crop_h = crop_h
+        self.crop_w = crop_w
 
         # We need to specify augmentations differently in newer versions of torchvision.
         # We first try the newer tuple version; if this fails we fall back to scalars
@@ -166,8 +173,7 @@ class MonoDataset(data.Dataset):
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
 
         # adjusting intrinsics to match each scale in the pyramid
-        self.crop_h = [96,128,160,192,192]
-        self.crop_w = [192,256,384,448,640]
+        
         if self.refine:
             for scale in range(5):
                 K = self.K.copy()

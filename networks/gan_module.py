@@ -85,7 +85,7 @@ class pix2pix_loss(nn.Module):
         #fake predout wapred RGB
         #GT           crop RGB
         GAN_loss_total = 0
-        if self.epoch > self.start_gan:
+        if self.epoch > self.start_gan and self.epoch < self.stop_gan:
             for s in self.refine_stage:
                 GAN_loss_s = 0
                 stage_weight_curr = self.stage_weight[s]
@@ -177,12 +177,12 @@ class pix2pix_loss(nn.Module):
         if self.crop_mode == 'b':
             self.start_gan = 4
         else:
-            self.start_gan = 0
+            self.start_gan = 2
         self.stop_gan = 24
         outputs["D_update"] = False
         outputs["G_update"] = False
         #if epoch < 30:
-        if epoch % 2 != 0 and epoch > self.start_gan:
+        if epoch % 2 != 0 and epoch > self.start_gan and epoch < self.stop_gan:
             outputs["D_update"] = True
             outputs["G_update"] = False
             self.set_requires_grad(self.netD, True)  # enable backprop for D
@@ -195,7 +195,7 @@ class pix2pix_loss(nn.Module):
 
         # update G
         else:
-            if epoch > self.start_gan and epoch:
+            if epoch > self.start_gan and epoch < self.stop_gan:
                 outputs["G_update"] = True
             else:
                 outputs["G_update"] = False
@@ -308,7 +308,7 @@ class pix2pix_loss_iter2(pix2pix_loss):
         #fake predout wapred RGB
         #GT           crop RGB
         GAN_loss_total = 0
-        if self.epoch > self.start_gan:
+        if self.epoch > self.start_gan and self.epoch < self.stop_gan:
             for s in self.refine_stage:
                 GAN_loss_s = 0
                 stage_weight_curr = self.stage_weight[s]

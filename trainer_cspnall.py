@@ -166,13 +166,13 @@ class Trainer:
 
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode)
+            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode, crop_h=self.crop_h, crop_w=self.crop_w)
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode)
+            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode, crop_h=self.crop_h, crop_w=self.crop_w)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
@@ -223,10 +223,11 @@ class Trainer:
     def train(self):
         """Run the entire training pipeline
         """
-        self.epoch = 0
+        if self.opt.load_weights_folder is None:
+            self.epoch = 0
         self.step = 0
         self.start_time = time.time()
-        for self.epoch in range(self.opt.num_epochs):
+        for self.epoch in range(self.epoch, self.epoch + self.opt.num_epochs):
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
@@ -296,7 +297,7 @@ class Trainer:
             features = None
             inputs["depth_gt_part"] = F.interpolate(inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
             disp_part_gt = depth_to_disp(inputs["depth_gt_part"] ,self.opt.min_depth,self.opt.max_depth)
-            if (self.gan or self.gan2) and self.epoch % 2 != 0 and self.epoch > self.pix2pix.start_gan:
+            if (self.gan or self.gan2) and self.epoch % 2 != 0 and self.epoch > self.pix2pix.start_gan and self.epoch < self.pix2pix.stop_gan:
                 with torch.no_grad():
                     outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             else:
@@ -787,6 +788,7 @@ class Trainer:
                 to_save['height'] = self.opt.height
                 to_save['width'] = self.opt.width
                 to_save['use_stereo'] = self.opt.use_stereo
+                to_save['epoch'] = self.epoch
             torch.save(to_save, save_path)
 
         save_path = os.path.join(save_folder, "{}.pth".format("adam"))
@@ -807,6 +809,10 @@ class Trainer:
             if os.path.exists(path):
                 model_dict = self.models[n].state_dict()
                 pretrained_dict = torch.load(path)
+                if 'epoch' in pretrained_dict.keys():
+                    self.epoch = pretrained_dict['epoch']
+                else:
+                    self.epoch = 0
                 pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
                 model_dict.update(pretrained_dict)
                 self.models[n].load_state_dict(model_dict)
