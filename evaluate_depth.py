@@ -81,12 +81,21 @@ def evaluate(opt):
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
         refine = opt.refine
 
-
+        if refine:
+            opt.refine_stage = list(range(opt.refine_stage))
+            crop_h = [96,128,160,192]
+            crop_w = [192,256,384,640]
+            if len(opt.refine_stage) > 4:
+                crop_h = [96,128,160,192,192]
+                crop_w = [192,256,384,448,640]
+        else:
+            crop_h = None
+            crop_w = None
         encoder_dict = torch.load(encoder_path)
 
         dataset = datasets.KITTIDepthDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
-                                           [0], 4, is_train=False, refine=opt.refine, crop_mode=opt.crop_mode)
+                                           [0], 4, is_train=False, refine=opt.refine, crop_mode=opt.crop_mode, crop_h=crop_h, crop_w=crop_w)
         dataloader = DataLoader(dataset, 1, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
@@ -102,13 +111,8 @@ def evaluate(opt):
         depth_decoder.cuda()
         depth_decoder.eval()
         if refine:
-            opt.refine_stage = list(range(opt.refine_stage))
+            
             renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
-            crop_h = [96,128,160,192]
-            crop_w = [192,256,384,640]
-            if len(opt.refine_stage) > 4:
-                crop_h = [96,128,160,192,192]
-                crop_w = [192,256,384,448,640]
             if opt.refine_model == 'i':
                 #mid_refine = networks.Iterative_Propagate(crop_h,crop_w)
                 #mid_refine = networks.Iterative_Propagate_meta(crop_h,crop_w)
