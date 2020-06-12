@@ -100,7 +100,7 @@ class pix2pix_loss(nn.Module):
                 GAN_loss_total += GAN_loss_s
                 losses["loss/G_{}".format(s)] = GAN_loss_total 
             losses["loss/G_total"] = GAN_loss_total / len(self.refine_stage)
-            losses["loss"] += losses["loss/G_total"] * 0.05
+            losses["loss"] += losses["loss/G_total"] * 0.01
         losses["loss"].backward()
         return losses
     
@@ -174,7 +174,11 @@ class pix2pix_loss(nn.Module):
     def forward(self,inputs,outputs,losses,epoch):
         #D:
         self.epoch = epoch
-        self.start_gan = 0
+        if self.crop_mode == 'b':
+            self.start_gan = 4
+        else:
+            self.start_gan = 0
+        self.stop_gan = 24
         outputs["D_update"] = False
         outputs["G_update"] = False
         #if epoch < 30:
@@ -191,7 +195,7 @@ class pix2pix_loss(nn.Module):
 
         # update G
         else:
-            if epoch > self.start_gan:
+            if epoch > self.start_gan and epoch:
                 outputs["G_update"] = True
             else:
                 outputs["G_update"] = False

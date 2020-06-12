@@ -135,11 +135,8 @@ class Simple_Propagate(nn.Module):
         
         outputs["blur_disp"] = blur_depth_o
         outputs["disp_all_in"] = blur_depth
-        if self.crop_mode == 'b':
-            #outputs["dense_gt"] = self.crop(blur_depth,72,164)
-            outputs["dense_gt"] = self.crop(blur_depth,128,164)
-        else:
-            outputs["dense_gt"] = self.crop(blur_depth,64,128)
+        
+        outputs["dense_gt"] = self.crop(blur_depth,64,128)
         outputs['scale'] = scale
         return outputs
 
@@ -185,6 +182,7 @@ class Iterative_Propagate(Simple_Propagate):
             scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
         else:
             scale = 1
+
         dep = dep * scale
         mask = dep_last.sign()
         for i in range(self.propagate_time): 
