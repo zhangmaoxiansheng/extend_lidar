@@ -216,9 +216,8 @@ class MonoDataset(data.Dataset):
 
         if self.load_depth:
             if self.crop_mode == 's':
-                depth_gt = self.get_sparse_depth(folder, frame_index, side, do_flip)
-            else:
-                depth_gt = self.get_depth(folder, frame_index, side, do_flip)
+                depth_sparse_gt = self.get_sparse_depth(folder, frame_index, side, do_flip)
+            depth_gt = self.get_depth(folder, frame_index, side, do_flip)
             def random_crop(depth_image,h=160,w=320):
                 mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
                 origin_h = depth_image.shape[0]
@@ -269,8 +268,10 @@ class MonoDataset(data.Dataset):
                     sparse_depth = depth_curr_dilated * mask
                 start_point = [h_start,w_start]
                 return sparse_depth,start_point
-            if self.crop_mode=='c' or self.crop_mode=='s':
+            if self.crop_mode=='c':
                 sp_depth,mask = center_crop(depth_gt)
+            elif self.crop_mode=='s':
+                sp_depth,mask = center_crop(depth_sparse_gt)
             elif self.crop_mode=='b':
                 sp_depth,mask = bottle_crop(depth_gt)
             elif self.crop_mode=='r':
