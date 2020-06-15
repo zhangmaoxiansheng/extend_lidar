@@ -222,10 +222,10 @@ class MonoDataset(data.Dataset):
                 mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
                 origin_h = depth_image.shape[0]
                 origin_w = depth_image.shape[1]
-                range_h_start = origin_h/2 - 180
-                range_w_start = origin_w/2 - 364
-                range_h_end = origin_h/2 + (180 - h)
-                range_w_end = origin_w/2 + (364 - w)
+                range_h_start = origin_h/2 - 180/2
+                range_w_start = origin_w/2 - 364/2
+                range_h_end = origin_h/2 + (180/2 - h)
+                range_w_end = origin_w/2 + (364/2 - w)
                 h_start = int(np.random.randint(range_h_start,range_h_end))
                 w_start = int(np.random.randint(range_w_start,range_w_end))
                 mask[h_start:h_start+h,w_start:w_start+w] = 1

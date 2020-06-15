@@ -174,10 +174,7 @@ class pix2pix_loss(nn.Module):
     def forward(self,inputs,outputs,losses,epoch):
         #D:
         self.epoch = epoch
-        if self.crop_mode == 'b':
-            self.start_gan = 4
-        else:
-            self.start_gan = 2
+        self.start_gan = 2
         self.stop_gan = 24
         outputs["D_update"] = False
         outputs["G_update"] = False
