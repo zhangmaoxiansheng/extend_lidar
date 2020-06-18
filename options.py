@@ -206,7 +206,10 @@ class MonodepthOptions:
         self.parser.add_argument("--eval_mono",
                                  help="if set evaluates in mono mode",
                                  action="store_true")
-        self.parser.add_argument("--disable_median_scaling",
+        self.parser.add_argument("--median_scaling",
+                                 help="if set disables median scaling in evaluation",
+                                 action="store_true")
+        self.parser.add_argument("--center_median_scaling",
                                  help="if set disables median scaling in evaluation",
                                  action="store_true")
         self.parser.add_argument("--pred_depth_scale_factor",
@@ -218,7 +221,7 @@ class MonodepthOptions:
                                  help="optional path to a .npy disparities file to evaluate")
         self.parser.add_argument("--eval_split",
                                  type=str,
-                                 default="eigen",
+                                 default="eigen_benchmark",
                                  choices=[
                                     "eigen", "eigen_benchmark", "benchmark", "odom_9", "odom_10"],
                                  help="which split to run eval on")

@@ -174,7 +174,7 @@ class pix2pix_loss(nn.Module):
     def forward(self,inputs,outputs,losses,epoch):
         #D:
         self.epoch = epoch
-        self.start_gan = 2
+        self.start_gan = 4
         self.stop_gan = 24
         outputs["D_update"] = False
         outputs["G_update"] = False

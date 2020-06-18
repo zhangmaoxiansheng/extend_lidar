@@ -24,6 +24,17 @@ splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 # to convert our stereo predictions to real-world scale we multiply our depths by 5.4.
 STEREO_SCALE_FACTOR = 5.4
 
+def crop_center(image,h=160,w=320):
+    origin_h = image.shape[0]
+    origin_w = image.shape[1]
+    h_start = max(int(round((origin_h-h)/2)),0)
+    h_end = min(h_start + h,origin_h)
+    w_start = max(int(round((origin_w-w)/2)),0)
+    w_end = min(w_start + w,origin_w)
+    output = image[h_start:h_end,w_start:w_end] 
+    return output
+
+
 
 def compute_errors(gt, pred):
     """Computation of error metrics between predicted and ground truth depths
@@ -76,7 +87,7 @@ def evaluate(opt):
         print("-> Loading weights from {}".format(opt.load_weights_folder))
 
         #filenames = readlines(os.path.join(splits_dir, opt.eval_split, "val_files_p.txt"))
-        filenames = readlines(os.path.join(splits_dir, "eigen", "test_files_p.txt"))
+        filenames = readlines(os.path.join(splits_dir, "eigen_benchmark", "test_files.txt"))
         encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
         refine = opt.refine
@@ -114,8 +125,6 @@ def evaluate(opt):
             
             renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
             if opt.refine_model == 'i':
-                #mid_refine = networks.Iterative_Propagate(crop_h,crop_w)
-                #mid_refine = networks.Iterative_Propagate_meta(crop_h,crop_w)
                 mid_refine = networks.Iterative_Propagate(crop_h,crop_w,opt.crop_mode)
             elif opt.refine_model == 'id':
                 mid_refine = networks.Iterative_Propagate_deform(crop_h,crop_w,opt.crop_mode)
@@ -159,18 +168,14 @@ def evaluate(opt):
                 pred_disp, _ = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
                 
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
-                #print("working {}".format(batch_index))
 
                 if opt.post_process:
                     N = pred_disp.shape[0] // 2
                     pred_disp = batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
 
                 pred_disps.append(pred_disp)
-        #print("done 0")
         pred_disps = np.concatenate(pred_disps,axis=0)
         gt = np.concatenate(gt,axis=0)
-        #print("done 1")
-
     else:
         # Load predictions from file
         print("-> Loading predictions from {}".format(opt.ext_disp_to_eval))
@@ -192,25 +197,6 @@ def evaluate(opt):
         print("-> Evaluation disabled. Done.")
         quit()
 
-    elif opt.eval_split == 'benchmark':
-        save_dir = os.path.join(opt.load_weights_folder, "benchmark_predictions")
-        print("-> Saving out benchmark predictions to {}".format(save_dir))
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-
-        for idx in range(len(pred_disps)):
-            disp_resized = cv2.resize(pred_disps[idx], (1216, 352))
-            depth = STEREO_SCALE_FACTOR / disp_resized
-            depth = np.clip(depth, 0, 80)
-            depth = np.uint16(depth * 256)
-            save_path = os.path.join(save_dir, "{:010d}.png".format(idx))
-            cv2.imwrite(save_path, depth)
-
-        print("-> No ground truth is available for the KITTI benchmark, so not evaluating. Done.")
-        quit()
-
-    #gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    #gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
     gt_depths = gt
     print("-> Evaluating")
 
@@ -247,16 +233,21 @@ def evaluate(opt):
         else:
             mask = gt_depth > 0
 
+        pred_depth_o = crop_center(pred_depth)
         pred_depth = pred_depth[mask]
+        gt_depth_part = crop_center(gt_depth)
         gt_depth = gt_depth[mask]
-
-        # mask2 = gt_depth < 80
-        # pred_depth = pred_depth[mask2]
-        # gt_depth = gt_depth[mask2]
+        
 
         pred_depth *= opt.pred_depth_scale_factor
-        if not opt.disable_median_scaling:
+        if opt.median_scaling:
             ratio = np.median(gt_depth) / np.median(pred_depth)
+            ratios.append(ratio)
+            pred_depth *= ratio
+        if opt.center_median_scaling:
+            mask2 = gt_depth_part>0
+            gt_depth_part = gt_depth_part[mask2]
+            ratio = np.median(gt_depth_part) / np.median(pred_depth_o[mask2])
             ratios.append(ratio)
             pred_depth *= ratio
 

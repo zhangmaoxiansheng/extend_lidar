@@ -55,7 +55,6 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
         if self.refine:
-            #self.models["mid_refine"] = networks.Simple_Propagate()
             self.models["mid_refine"] = networks.U_refine()
             self.models["mid_refine"].to(self.device)
             self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
@@ -656,25 +655,6 @@ class Trainer:
         for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
             if self.refine:
                 writer.add_image("disp_mid{}".format(j),normalize_image(outputs["disp_all_in"][j]), self.step)
-                # writer.add_image("disp_part_gt{}".format(j),normalize_image(outputs["part_gt"][j]), self.step)
-                # save_name = ('./part_gt/%d_%d_partgt.mat'%(self.step,j))
-                # save_name2 = ('./part_gt/%d_%d_dep.mat'%(self.step,j))
-                # save_name3 = ('./part_gt/%d_%d_mid.mat'%(self.step,j))
-                # save_name4 = ('./part_gt/%d_%d_disp.mat'%(self.step,j))
-                # save_name5 = ('./part_gt/%d_%d_depthall.mat'%(self.step,j))
-                # depth_part_gt = np.asarray(inputs["depth_gt_part"][j].squeeze().cpu())
-                # part_gt = np.asarray(outputs["part_gt"][j].squeeze().cpu())
-                # mid = np.asarray(outputs["disp_all_in"][j].squeeze().detach())
-                # disp0 = outputs[("disp", 0)][j].squeeze().detach().cpu().numpy()
-                # depth_all_gt = F.interpolate(inputs["depth_gt"], [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                # all_gt = depth_all_gt[j].squeeze().detach().cpu().numpy()
-                # scio.savemat(save_name, {'part_disp_gt':part_gt})
-                # scio.savemat(save_name2, {'part_gt_dep':depth_part_gt})
-                # scio.savemat(save_name3, {'mid':mid})
-                # scio.savemat(save_name4, {'disp':disp0})
-                # scio.savemat(save_name5, {'depth':all_gt})
-                # writer.add_image("disp_part_mask{}".format(j),normalize_image(outputs["part_mask"][j]), self.step)
-                #writer.add_image("ref_pred_img",outputs[("color", -1, 'r')][j].data, self.step)
             for s in scales_:
                 for frame_id in self.opt.frame_ids:
                     if s != 'r':

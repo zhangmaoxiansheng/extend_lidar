@@ -43,12 +43,15 @@ def export_gt_depths_kitti():
         frame_id = int(frame_id)
 
         if opt.split == "eigen":
-            calib_dir = os.path.join(opt.data_path, folder.split("/")[0])
-            velo_filename = os.path.join(opt.data_path, folder,
+            calib_dir = os.path.join(opt.data_path,'kitti_raw_data', folder.split("/")[0])
+            velo_filename = os.path.join(opt.data_path, 'kitti_raw_data', folder,
                                          "velodyne_points/data", "{:010d}.bin".format(frame_id))
             gt_depth = generate_depth_map(calib_dir, velo_filename, 2, True)
         elif opt.split == "eigen_benchmark":
-            gt_depth_path = os.path.join(opt.data_path, folder, "proj_depth",
+            gt_depth_path = os.path.join(opt.data_path, 'kitti_depth', 'train',folder.split("/")[1], "proj_depth",
+                                         "groundtruth", "image_02", "{:010d}.png".format(frame_id))
+            if not os.path.exists(gt_depth_path):
+                gt_depth_path = os.path.join(opt.data_path, 'kitti_depth', 'val',folder.split("/")[1], "proj_depth",
                                          "groundtruth", "image_02", "{:010d}.png".format(frame_id))
             gt_depth = np.array(pil.open(gt_depth_path)).astype(np.float32) / 256
 
