@@ -237,7 +237,6 @@ def evaluate(opt):
         pred_depth = pred_depth[mask]
         gt_depth_part = crop_center(gt_depth)
         gt_depth = gt_depth[mask]
-        
 
         pred_depth *= opt.pred_depth_scale_factor
         if opt.median_scaling:
@@ -256,7 +255,7 @@ def evaluate(opt):
 
         errors.append(compute_errors(gt_depth, pred_depth))
 
-    if not opt.disable_median_scaling:
+    if opt.median_scaling or opt.center_median_scaling:
         ratios = np.array(ratios)
         med = np.median(ratios)
         print(" Scaling ratios | med: {:0.3f} | std: {:0.3f}".format(med, np.std(ratios / med)))

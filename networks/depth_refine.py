@@ -9,7 +9,7 @@ import torchvision.models as models
 from collections import OrderedDict
 from .resnet_encoder import ResnetEncoder,resnet_multiimage_input
 import numpy as np
-# from .deform_conv import DeformConv
+from .deform_conv import DeformConv
 class Simple_Propagate(nn.Module):
     def __init__(self,crop_h,crop_w,mode='c'):
         super(Simple_Propagate, self).__init__()
@@ -140,22 +140,104 @@ class Simple_Propagate(nn.Module):
         outputs["dense_gt"] = self.crop(blur_depth,64,128)
         outputs['scale'] = scale
         return outputs
+class BasicBlock(nn.Module):
+
+    def __init__(self, inplanes, planes):
+        super(BasicBlock, self).__init__()
+        self.conv1 = Conv3x3(inplanes, planes)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.relu = nn.ELU(inplace=True)
+        self.conv2 = Conv3x3(planes, planes)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out += residual
+        out = self.relu(out)
+
+        return out
+
 class Depth_encoder(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(ConvBlock(1,4),
                             ConvBlock(4,8),
-                            ConvBlock(8,8),
-                            Conv3x3(8,4))
-        # self.model_seq4 = nn.Sequential(ConvBlock(1,4),
-        #                     ConvBlock(4,8),
-        #                     Conv3x3(8,8))
+                            ConvBlock(8,16),
+                            BasicBlock(16,16),
+                            ConvBlock(16,32),
+                            BasicBlock(32,32),
+                            ConvBlock(32,16),
+                            BasicBlock(16,16),
+                            ConvBlock(16,4)
+                            )
     def forward(self,x):
         x = self.model(x)
         return x
 class Iterative_Propagate(Simple_Propagate):
     def __init__(self,crop_h,crop_w,mode):
         super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode)
+        self.model_ref0 = nn.Sequential(
+                            ChannelGate(20),
+                            ConvBlock(20,32),
+                            ConvBlock(32,16),
+                            ConvBlock(16,8),
+                            Conv3x3(8,1),nn.Sigmoid())
+
+        self.model_ref1 = nn.Sequential(
+                            ChannelGate(20),
+                            ConvBlock(20,32),
+                            ConvBlock(32,32),
+                            ConvBlock(32,16),
+                            Deformable_Conv(16,16),
+                            Conv3x3(16,1),nn.Sigmoid())
+
+        self.models = nn.ModuleList([self.model_ref0,self.model_ref1])
+        self.dep_enc = Depth_encoder()
+        self.propagate_time = 1
+        
+    
+    def stage_forward(self,features,rgbd,dep_last,stage):
+        if stage > 2:
+            model = self.models[0]
+        else:
+            model = self.models[1]
+        dep_enc = self.dep_enc
+        h = self.crop_h[stage]
+        w = self.crop_w[stage]
+        #dep_last is the padded depth
+        rgbd = self.crop(rgbd,h,w)
+        feature_crop = self.crop(features,h,w)
+        dep = rgbd[:,3,:,:].unsqueeze(1)
+        if torch.median(dep[dep_last>0]) > 0:
+            scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
+        else:
+            scale = 1
+        dep = dep * scale
+        mask = dep_last.sign()
+        
+        for i in range(self.propagate_time): 
+            dep_fusion = dep_last * mask + dep * (1-mask)
+            dep_fusion = dep_enc(dep_fusion)
+            feature_stage = torch.cat((feature_crop,dep_fusion),1)
+            dep = model(feature_stage)
+            if torch.median(dep[dep_last>0]) > 0:
+                scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
+            else:
+                scale = 1
+            dep = dep * scale
+        return dep, feature_stage
+
+class Iterative_Propagate_old(Simple_Propagate):
+    def __init__(self,crop_h,crop_w,mode):
+        super().__init__(crop_h, crop_w,mode)
         self.model_ref0 = nn.Sequential(ConvBlock(16+1,32),
                             ConvBlock(32,16),
                             ConvBlock(16,8),
@@ -235,51 +317,50 @@ class Iterative_Propagate(Simple_Propagate):
             dep = dep * scale
         return dep, feature_stage
 
+class Deformable_Conv(nn.Module):
+    def __init__(self,inC,outC):
+        super(Deformable_Conv,self).__init__()
+        num_deformable_groups = 2
+        kH, kW = 3,3
+        self.offset_conv = nn.Conv2d(inC, num_deformable_groups * 2 * kH * kW, (kH,kW),1,1,bias=False)
+        self.deform_conv = DeformConv(inC, outC, (kH,kW), 1, 1, deformable_groups = num_deformable_groups)
+        nn.init.constant_(self.offset_conv.weight, 0.)
+        #nn.init.constant_(self.offset_conv.bias, 0.)
+    def forward(self, x):
+        offset = self.offset_conv(x)
+        x = self.deform_conv(x,offset)
+        return x
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+class ChannelGate(nn.Module):
+    def __init__(self, gate_channels, reduction_ratio=2, pool_types=['avg', 'max']):
+        super(ChannelGate, self).__init__()
+        self.gate_channels = gate_channels
+        self.mlp = nn.Sequential(
+            Flatten(),
+            nn.Linear(gate_channels, gate_channels // reduction_ratio),
+            nn.ReLU(),
+            nn.Linear(gate_channels // reduction_ratio, gate_channels)
+            )
+        self.pool_types = pool_types
+    def forward(self, x):
+        channel_att_sum = None
+        for pool_type in self.pool_types:
+            if pool_type=='avg':
+                avg_pool = F.avg_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
+                channel_att_raw = self.mlp( avg_pool )
+            elif pool_type=='max':
+                max_pool = F.max_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
+                channel_att_raw = self.mlp( max_pool )
 
+            if channel_att_sum is None:
+                channel_att_sum = channel_att_raw
+            else:
+                channel_att_sum = channel_att_sum + channel_att_raw
 
-# class Iterative_Propagate_deform(Iterative_Propagate):
-#     def __init__(self,crop_h,crop_w,mode='c'):
-#         super(Iterative_Propagate_deform, self).__init__(crop_h, crop_w,mode='c')
-#         self.model_ref0 = nn.Sequential(ConvBlock(16+1,32),
-#                             ConvBlock(32,16),
-#                             Deformable_Conv(16,8),
-#                             Conv3x3(8,1),nn.Sigmoid())
-#         self.model_ref1 = nn.Sequential(ConvBlock(16+1,32),
-#                             ConvBlock(32,16),
-#                             Deformable_Conv(16,8),
-#                             Conv3x3(8,1),nn.Sigmoid())
-#         self.model_ref2 = nn.Sequential(ConvBlock(16+1,32),
-#                             ConvBlock(32,32),
-#                             Deformable_Conv(32,16),
-#                             Conv3x3(16,1),nn.Sigmoid())
-#         self.model_ref3 = nn.Sequential(ConvBlock(16+1,32),
-#                             ConvBlock(32,32,2),
-#                             Deformable_Conv(32,16),
-#                             Conv3x3(16,1),nn.Sigmoid())
-#         self.model_ref4 = nn.Sequential(ConvBlock(16+1,32),
-#                             ConvBlock(32,32,4),
-#                             ConvBlock(32,16,2),
-#                             Deformable_Conv(16,16),
-#                             Conv3x3(16,1),nn.Sigmoid())
-#         self.models = nn.ModuleList([self.model_ref0,self.model_ref1,self.model_ref2,self.model_ref3])
-#         if len(self.crop_h) > 4:
-#             self.models.append(self.model_ref4)
-#         self.propagate_time = 3
-
-# class Deformable_Conv(nn.Module):
-#     def __init__(self,inC,outC):
-#         super(Deformable_Conv,self).__init__()
-#         num_deformable_groups = 2
-#         kH, kW = 3,3
-#         self.offset_conv = nn.Conv2d(inC, num_deformable_groups * 2 * kH * kW, (kH,kW),1,1,bias=False)
-#         self.deform_conv = DeformConv(inC, outC, (kH,kW), 1, 1, deformable_groups = num_deformable_groups)
-#         nn.init.constant_(self.offset_conv.weight, 0.)
-#         #nn.init.constant_(self.offset_conv.bias, 0.)
-#     def forward(self, x):
-#         offset = self.offset_conv(x)
-#         x = self.deform_conv(x,offset)
-#         return x
-
+        scale = F.sigmoid( channel_att_sum ).unsqueeze(2).unsqueeze(3).expand_as(x)
+        return x * scale
 
 
 class Iterative_Propagate_fc(Iterative_Propagate):

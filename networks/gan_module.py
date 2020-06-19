@@ -175,7 +175,7 @@ class pix2pix_loss(nn.Module):
         #D:
         self.epoch = epoch
         self.start_gan = 4
-        self.stop_gan = 24
+        self.stop_gan = 30
         outputs["D_update"] = False
         outputs["G_update"] = False
         #if epoch < 30:

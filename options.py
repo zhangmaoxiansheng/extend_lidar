@@ -85,6 +85,9 @@ class MonodepthOptions:
         self.parser.add_argument("--refine",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
+        self.parser.add_argument("--inv_refine",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
         self.parser.add_argument("--loss_mask",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")

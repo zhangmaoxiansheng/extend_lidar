@@ -30,7 +30,7 @@ import scipy.io as scio
 class Trainer:
     def __init__(self, options):
         self.opt = options
-        self.refine = options.refine
+        self.refine = options.refine or options.inv_refine
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
         self.crop_mode = options.crop_mode
 
@@ -55,16 +55,25 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
         if self.refine:
-            self.models["mid_refine"] = networks.U_refine()
+            self.refine_stage = list(range(options.refine_stage))
+            if len(self.refine_stage) > 4:
+                self.crop_h = [96,128,160,192,192]
+                self.crop_w = [192,256,384,448,640]
+            else:
+                self.crop_h = [96,128,160,192]
+                self.crop_w = [192,256,384,640]
+            if self.opt.refine_model == 's':
+                self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w,self.crop_mode)
+            elif self.opt.refine_model == 'i':
+                self.models["mid_refine"] = networks.Iterative_Propagate_old(self.crop_h,self.crop_w,self.crop_mode)
             self.models["mid_refine"].to(self.device)
-            self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained", num_input_images=1)
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales)
+            self.models["encoder"].num_ch_enc, self.opt.scales,refine=self.refine)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
@@ -77,8 +86,6 @@ class Trainer:
 
                 self.models["pose_encoder"].to(self.device)
                 self.parameters_to_train += list(self.models["pose_encoder"].parameters())
-                if self.refine:
-                    self.parameters_to_train_refine+= list(self.models["pose_encoder"].parameters())
 
                 self.models["pose"] = networks.PoseDecoder(
                     self.models["pose_encoder"].num_ch_enc,
@@ -95,8 +102,6 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
-            if self.refine:
-                self.parameters_to_train_refine += list(self.models["pose"].parameters())
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -110,10 +115,8 @@ class Trainer:
             self.models["predictive_mask"].to(self.device)
             self.parameters_to_train += list(self.models["predictive_mask"].parameters())
 
-        if self.refine:
-            parameters_to_train = self.parameters_to_train_refine
-        else:
-            parameters_to_train = self.parameters_to_train
+        
+        parameters_to_train = self.parameters_to_train
         self.model_optimizer = optim.Adam(parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
@@ -141,13 +144,13 @@ class Trainer:
 
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode)
+            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, refine=False, crop_mode=self.crop_mode)
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode)
+            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, refine=False, crop_mode=self.crop_mode)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
@@ -246,50 +249,28 @@ class Trainer:
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
 
-        if self.opt.pose_model_type == "shared":
-            # If we are using a shared encoder for both depth and pose (as advocated
-            # in monodepthv1), then all images are fed separately through the depth encoder.
-            all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])
-            all_features = self.models["encoder"](all_color_aug)
-            all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
-
-            features = {}
-            for i, k in enumerate(self.opt.frame_ids):
-                features[k] = [f[i] for f in all_features]
-
-            outputs = self.models["depth"](features[0])
-        else:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
-            features = self.models["encoder"](inputs["color_aug", 0, 0])
-            outputs = self.models["depth"](features)
+        features = self.models["encoder"](inputs["color_aug", 0, 0])
+        outputs = self.models["depth"](features)
 
-        if self.opt.predictive_mask:
-            outputs["predictive_mask"] = self.models["predictive_mask"](features)
 
         if self.refine:
-            disp_blur = outputs[("disp", 0)]
-            features = None
-            outputs = {}
-            inputs["depth_gt_part"] = F.interpolate(inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
-            part_gt = inputs["depth_gt_part"] 
-            mask = part_gt.sign()
-            part_gt[part_gt == 0] = 1
-            disp_part_gt = depth_to_disp(part_gt,self.opt.min_depth,self.opt.max_depth)
-            disp_part_gt = disp_part_gt * mask
-            
-            outputs = self.models["mid_refine"](disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)])
-            outputs["part_gt"] = disp_part_gt
-            outputs["part_mask"] = mask
+            with torch.no_grad():
+                disp_blur = outputs[("disp", 0)]
+                features = None
+                inputs["depth_gt_part"] = F.interpolate(inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
+                disp_part_gt = depth_to_disp(inputs["depth_gt_part"] ,self.opt.min_depth,self.opt.max_depth)
+                
+                outputs_ref = self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage)
+                outputs["dense_gt"] = F.interpolate(outputs_ref[("disp",0)], [self.opt.height, self.opt.width], mode="bilinear")
+                
+                #outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
+                #_,outputs["dense_gt"] = disp_to_depth(outputs["dense_gt"],self.opt.min_depth,self.opt.max_depth)
         
         if self.use_pose_net:
             outputs.update(self.predict_poses(inputs, features))
         self.generate_images_pred(inputs, outputs)
-        if self.refine:
-            self.generate_images_pred_simple(inputs, outputs)
         losses = self.compute_losses(inputs, outputs)
-        
-        if self.refine:
-            losses["loss/scale"] = outputs["scale"]
 
         return outputs, losses
 
@@ -471,31 +452,12 @@ class Trainer:
         losses = {}
         total_loss = 0
         scales = self.opt.scales.copy()
-        #get the refine mask
-        if self.refine:
-            color = inputs[("color", 0, 0)]
-            reprojection_losses_mask = []
-            #disp = outputs["blur_depth"]
-            target = inputs[("color", 0, 0)]
-            for frame_id in self.opt.frame_ids[1:]:
-                pred = outputs[("color", frame_id, 'r')]
-                reprojection_losses_mask.append(1-self.compute_reprojection_loss(pred, target))
-
-            reprojection_losses_mask = torch.cat(reprojection_losses_mask, 1)
-            
-
-        #     scales.append('r')
+        
         for scale in scales:
             loss = 0
             reprojection_losses = []
 
-            if self.opt.v1_multiscale:
-                source_scale = scale
-            else:
-                source_scale = 0
-            # if scale == 'r':
-            #     color = inputs[("color", 0, 0)]
-            #else:
+            source_scale = 0
             color = inputs[("color", 0, scale)]
             
             disp = outputs[("disp", scale)]
@@ -510,18 +472,13 @@ class Trainer:
             disp_part_gt = depth_to_disp(depth_part_gt,self.opt.min_depth,self.opt.max_depth)
             mask = disp_part_gt>0
             depth_loss = torch.abs(disp_pred[mask] - disp_part_gt[mask]).mean()
-            scale_r = torch.median(disp_pred[mask] / disp_part_gt[mask])
-            depth_scale_loss = torch.abs(1 - scale_r)
             losses["loss/depth_{}".format(scale)] = depth_loss
-            losses["loss/depth_s_{}".format(scale)] = depth_scale_loss
-            depth_loss = depth_loss# * 0.9 + depth_scale_loss * 0.1
-            # depth_loss = torch.abs(depth_pred[mask] - depth_part_gt[mask])
-            # depth_loss = depth_loss.mean() / 100
+            depth_loss = depth_loss
             if self.refine:
-                depth_target = F.interpolate(outputs["blur_disp"], [disp.size(2), disp.size(3)], mode="nearest")
-                depth_ssim_loss = self.ssim(disp, depth_target).mean()
-                depth_loss = depth_ssim_loss
-                losses["loss/depth_ssim{}".format(scale)] = depth_ssim_loss
+                
+                depth_loss_refine = torch.abs(disp_pred-outputs["dense_gt"]).mean()
+                depth_loss += depth_loss_refine
+                depth_loss *= 2
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
@@ -571,8 +528,6 @@ class Trainer:
                 combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
             else:
                 combined = reprojection_loss
-            if self.refine:
-                combined = torch.cat((combined, reprojection_losses_mask), dim=1)
             if combined.shape[1] == 1:
                 to_optimise = combined
             else:
@@ -653,8 +608,6 @@ class Trainer:
             writer.add_scalar("{}".format(l), v, self.step)
 
         for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
-            if self.refine:
-                writer.add_image("disp_mid{}".format(j),normalize_image(outputs["disp_all_in"][j]), self.step)
             for s in scales_:
                 for frame_id in self.opt.frame_ids:
                     if s != 'r':
