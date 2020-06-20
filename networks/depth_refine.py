@@ -181,28 +181,45 @@ class Depth_encoder(nn.Module):
     def forward(self,x):
         x = self.model(x)
         return x
+
+class Depth_encoder2(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = nn.Sequential(ConvBlock(1,4),
+                            ConvBlock(4,8),
+                            ConvBlock(8,16),
+                            ConvBlock(16,16),
+                            ConvBlock(16,32),
+                            ConvBlock(32,32),
+                            ConvBlock(32,16),
+                            ConvBlock(16,8),
+                            ConvBlock(8,4),
+                            )
+    def forward(self,x):
+        x = self.model(x)
+        return x
 class Iterative_Propagate(Simple_Propagate):
-    def __init__(self,crop_h,crop_w,mode):
+    def __init__(self,crop_h,crop_w,mode,dropout=False):
         super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode)
         self.model_ref0 = nn.Sequential(
-                            ChannelGate(20),
+                            #ChannelGate(20),
                             ConvBlock(20,32),
                             ConvBlock(32,16),
                             ConvBlock(16,8),
                             Conv3x3(8,1),nn.Sigmoid())
 
         self.model_ref1 = nn.Sequential(
-                            ChannelGate(20),
+                            #ChannelGate(20),
                             ConvBlock(20,32),
                             ConvBlock(32,32),
                             ConvBlock(32,16),
-                            Deformable_Conv(16,16),
+                            #Deformable_Conv(16,16),
                             Conv3x3(16,1),nn.Sigmoid())
 
         self.models = nn.ModuleList([self.model_ref0,self.model_ref1])
         self.dep_enc = Depth_encoder()
         self.propagate_time = 1
-        
+        self.dropout = dropout
     
     def stage_forward(self,features,rgbd,dep_last,stage):
         if stage > 2:
@@ -226,6 +243,76 @@ class Iterative_Propagate(Simple_Propagate):
         for i in range(self.propagate_time): 
             dep_fusion = dep_last * mask + dep * (1-mask)
             dep_fusion = dep_enc(dep_fusion)
+            feature_stage = torch.cat((feature_crop,dep_fusion),1)
+            feature_stage = F.dropout2d(feature_stage,0.2,training=self.dropout)
+            dep = model(feature_stage)
+            if torch.median(dep[dep_last>0]) > 0:
+                scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
+            else:
+                scale = 1
+            dep = dep * scale
+        return dep, feature_stage
+
+class Iterative_Propagate_seq(Simple_Propagate):
+    def __init__(self,crop_h,crop_w,mode):
+        super().__init__(crop_h, crop_w,mode)
+        self.model_ref0 = nn.Sequential(ConvBlock(16+4,32),
+                            ConvBlock(32,16),
+                            ConvBlock(16,16),
+                            ConvBlock(16,8),
+                            Conv3x3(8,1),nn.Sigmoid())
+        self.model_ref1 = nn.Sequential(ConvBlock(16+4,32),
+                            ConvBlock(32,16),
+                            ConvBlock(16,16),
+                            ConvBlock(16,8),
+                            Conv3x3(8,1),nn.Sigmoid())
+        self.model_ref2 = nn.Sequential(ConvBlock(16+4,32),
+                            ConvBlock(32,32),
+                            ConvBlock(32,16),
+                            ConvBlock(16,16),
+                            ConvBlock(16,8),
+                            Conv3x3(8,1),nn.Sigmoid())
+        self.model_ref3 = nn.Sequential(ConvBlock(16+4,32),
+                            ConvBlock(32,32,2),
+                            ConvBlock(32,16),
+                            ConvBlock(16,16),
+                            ConvBlock(16,8),
+                            Conv3x3(8,1),nn.Sigmoid())
+        self.model_ref4 = nn.Sequential(ConvBlock(16+4,32),
+                            ConvBlock(32,32,4),
+                            ConvBlock(32,16,2),
+                            ConvBlock(16,16),
+                            ConvBlock(16,8),
+                            Conv3x3(8,1),nn.Sigmoid())
+
+        self.models = nn.ModuleList([self.model_ref0,self.model_ref1,self.model_ref2,self.model_ref3])
+        self.models_seq = nn.ModuleList([Depth_encoder(),Depth_encoder(),Depth_encoder(),Depth_encoder()])
+        if len(self.crop_h) > 4:
+            self.models.append(self.model_ref4)
+            self.models_seq.append(Depth_encoder())
+        self.propagate_time = 1
+        
+    
+    def stage_forward(self,features,rgbd,dep_last,stage):
+        model = self.models[stage]
+        model_seq = self.models_seq[stage]
+        h = self.crop_h[stage]
+        w = self.crop_w[stage]
+        #dep_last is the padded depth
+        rgbd = self.crop(rgbd,h,w)
+        feature_crop = self.crop(features,h,w)
+        #feature_crop = rgbd[:,1:,:,:]
+        dep = rgbd[:,3,:,:].unsqueeze(1)
+        if torch.median(dep[dep_last>0]) > 0:
+            scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
+        else:
+            scale = 1
+        dep = dep * scale
+        mask = dep_last.sign()
+        
+        for i in range(self.propagate_time): 
+            dep_fusion = dep_last * mask + dep * (1-mask)
+            dep_fusion = model_seq(dep_fusion)
             feature_stage = torch.cat((feature_crop,dep_fusion),1)
             dep = model(feature_stage)
             if torch.median(dep[dep_last>0]) > 0:
@@ -258,39 +345,15 @@ class Iterative_Propagate_old(Simple_Propagate):
                             ConvBlock(32,32,4),
                             ConvBlock(32,16,2),
                             Conv3x3(16,1),nn.Sigmoid())
-        
-        # self.model_ref0 = nn.Sequential(ConvBlock(16+4,32),
-        #                     ConvBlock(32,16),
-        #                     ConvBlock(16,8),
-        #                     Conv3x3(8,1),nn.Sigmoid())
-        # self.model_ref1 = nn.Sequential(ConvBlock(16+4,32),
-        #                     ConvBlock(32,16),
-        #                     ConvBlock(16,8),
-        #                     Conv3x3(8,1),nn.Sigmoid())
-        # self.model_ref2 = nn.Sequential(ConvBlock(16+4,32),
-        #                     ConvBlock(32,32),
-        #                     ConvBlock(32,16),
-        #                     Conv3x3(16,1),nn.Sigmoid())
-        # self.model_ref3 = nn.Sequential(ConvBlock(16+4,32),
-        #                     ConvBlock(32,32,2),
-        #                     ConvBlock(32,16),
-        #                     Conv3x3(16,1),nn.Sigmoid())
-        # self.model_ref4 = nn.Sequential(ConvBlock(16+4,32),
-        #                     ConvBlock(32,32,4),
-        #                     ConvBlock(32,16,2),
-        #                     Conv3x3(16,1),nn.Sigmoid())
 
         self.models = nn.ModuleList([self.model_ref0,self.model_ref1,self.model_ref2,self.model_ref3])
-        #self.models_seq = nn.ModuleList([Depth_encoder(),Depth_encoder(),Depth_encoder(),Depth_encoder()])
         if len(self.crop_h) > 4:
             self.models.append(self.model_ref4)
-            #self.models_seq.append(Depth_encoder())
         self.propagate_time = 1
         
     
     def stage_forward(self,features,rgbd,dep_last,stage):
         model = self.models[stage]
-        #model_seq = self.models_seq[stage]
         h = self.crop_h[stage]
         w = self.crop_w[stage]
         #dep_last is the padded depth
@@ -307,7 +370,6 @@ class Iterative_Propagate_old(Simple_Propagate):
         
         for i in range(self.propagate_time): 
             dep_fusion = dep_last * mask + dep * (1-mask)
-            #dep_fusion = model_seq(dep_fusion)
             feature_stage = torch.cat((feature_crop,dep_fusion),1)
             dep = model(feature_stage)
             if torch.median(dep[dep_last>0]) > 0:
@@ -362,55 +424,6 @@ class ChannelGate(nn.Module):
         scale = F.sigmoid( channel_att_sum ).unsqueeze(2).unsqueeze(3).expand_as(x)
         return x * scale
 
-
-class Iterative_Propagate_fc(Iterative_Propagate):
-    def __init__(self,crop_h,crop_w,mode='c'):
-        super(Iterative_Propagate_fc, self).__init__(crop_h, crop_w,mode='c')
-        self.fc1 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[0]*crop_w[0]*2,8)])
-        self.fc2 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[1]*crop_w[1]*2,8)])
-        self.fc3 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[2]*crop_w[2]*2,8)])
-        self.fc4 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[3]*crop_w[3]*2,8)])
-        self.fc5 = nn.ModuleList([ConvBlock(16+1,2),nn.Linear(crop_h[4]*crop_w[4]*2,8)])
-        
-        self.fc = nn.Sequential(nn.Linear(8,4),
-                                nn.Linear(4,4),
-                                nn.Linear(4,1))
-        self.fc_scale = nn.ModuleList([self.fc1,self.fc2,self.fc3,self.fc4,self.fc5])
-        self.scale_list = []
-
-    
-    def stage_forward(self,features,rgbd,dep_last,stage):
-        model = self.models[stage]
-        h = self.crop_h[stage]
-        w = self.crop_w[stage]
-        fc_scale = self.fc_scale[stage]
-        fc_conv = fc_scale[0]
-        fc_fully = fc_scale[1]
-        #dep_last is the padded depth
-        rgbd = self.crop(rgbd,h,w)
-        feature_crop = self.crop(features,h,w)
-        #feature_crop = rgbd[:,1:,:,:]
-        dep = rgbd[:,0,:,:].unsqueeze(1)
-        scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
-        dep = dep * scale
-        mask = dep_last.sign()
-        for i in range(self.propagate_time): 
-            dep_fusion = dep_last * mask + dep * (1-mask)
-            feature_stage = torch.cat((feature_crop,dep_fusion),1)
-            dep = model(feature_stage)
-            scale_feat = fc_conv(feature_stage)
-            scale_feat = scale_feat.view(scale_feat.shape[0],-1)
-            scale_fc = self.fc(fc_fully(scale_feat))
-            #print(scale_fc.shape)
-            if torch.median(dep[dep_last>0])>0:
-                scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])
-            else:
-                scale = 1
-            dep = dep * scale
-            for ii in range(scale_fc.shape[0]):
-                dep[ii] *= scale_fc[ii]
-            self.scale_list.append(scale_fc.mean())
-        return dep, feature_stage
 
 
 class U_refine(nn.Module):

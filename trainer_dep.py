@@ -24,6 +24,7 @@ from layers import *
 import datasets
 import networks
 import scipy.io as scio 
+import copy
 #from IPython import embed
 
 
@@ -66,6 +67,8 @@ class Trainer:
                 self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w,self.crop_mode)
             elif self.opt.refine_model == 'i':
                 self.models["mid_refine"] = networks.Iterative_Propagate_old(self.crop_h,self.crop_w,self.crop_mode)
+            for param in self.models["mid_refine"].parameters():
+                param.requeires_grad = False
             self.models["mid_refine"].to(self.device)
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained", num_input_images=1)
@@ -102,17 +105,6 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
-
-        if self.opt.predictive_mask:
-            assert self.opt.disable_automasking, \
-                "When using predictive_mask, please disable automasking with --disable_automasking"
-
-            self.models["predictive_mask"] = networks.DepthDecoder(
-                self.models["encoder"].num_ch_enc, self.opt.scales,
-                num_output_channels=(len(self.opt.frame_ids) - 1))
-            self.models["predictive_mask"].to(self.device)
-            self.parameters_to_train += list(self.models["predictive_mask"].parameters())
-
         
         parameters_to_train = self.parameters_to_train
         self.model_optimizer = optim.Adam(parameters_to_train, self.opt.learning_rate)
@@ -121,6 +113,17 @@ class Trainer:
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
+        if self.refine:
+            self.models["encoder_nograd"] = copy.deepcopy(self.models["encoder"])
+            for param in self.models["encoder_nograd"].parameters():
+                param.requeires_grad=False
+            self.models["encoder_nograd"].to(self.device)
+            self.models["depth_nograd"] = copy.deepcopy(self.models["depth"])
+            for param in self.models["depth_nograd"].parameters():
+                param.requeires_grad=False
+            self.models["depth_nograd"].to(self.device)
+
+
 
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
@@ -254,12 +257,14 @@ class Trainer:
 
         if self.refine:
             with torch.no_grad():
-                disp_blur = outputs[("disp", 0)]
+                features_nograd = self.models["encoder_nograd"](inputs["color_aug", 0, 0])
+                outputs_nograd = self.models["depth_nograd"](features_nograd)
+                disp_blur = outputs_nograd[("disp", 0)]
                 features = None
                 inputs["depth_gt_part"] = F.interpolate(inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
                 disp_part_gt = depth_to_disp(inputs["depth_gt_part"] ,self.opt.min_depth,self.opt.max_depth)
                 
-                outputs_ref = self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage)
+                outputs_ref = self.models["mid_refine"](outputs_nograd["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage)
                 outputs["dense_gt"] = F.interpolate(outputs_ref[("disp",0)], [self.opt.height, self.opt.width], mode="bilinear")
                 
                 #outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered

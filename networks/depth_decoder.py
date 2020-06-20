@@ -12,12 +12,12 @@ import torch.nn as nn
 
 from collections import OrderedDict
 from layers import *
+import torch.nn.functional as F
 
 
 class DepthDecoder(nn.Module):
     def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True, refine = False):
         super(DepthDecoder, self).__init__()
-
         self.refine = refine
         self.num_output_channels = num_output_channels
         self.use_skips = use_skips
@@ -48,18 +48,22 @@ class DepthDecoder(nn.Module):
         self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, input_features):
+    def forward(self, input_features, dropout=False):
         self.outputs = {}
 
         # decoder
         x = input_features[-1]
         for i in range(4, -1, -1):
             x = self.convs[("upconv", i, 0)](x)
+            if i == 4:
+                F.dropout2d(x,0.25,training=dropout)
             x = [upsample(x)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]
             x = torch.cat(x, 1)
             x = self.convs[("upconv", i, 1)](x)
+            if i == 4:
+                F.dropout2d(x,0.25,training=dropout)
             if i in self.scales:
                 self.outputs[("disp", i)] = self.sigmoid(self.convs[("dispconv", i)](x))
             if i == 0 and self.refine:

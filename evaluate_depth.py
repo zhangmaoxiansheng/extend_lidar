@@ -122,7 +122,6 @@ def evaluate(opt):
         depth_decoder.cuda()
         depth_decoder.eval()
         if refine:
-            
             renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
             if opt.refine_model == 'i':
                 mid_refine = networks.Iterative_Propagate(crop_h,crop_w,opt.crop_mode)
