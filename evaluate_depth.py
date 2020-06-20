@@ -240,7 +240,6 @@ def evaluate(opt):
         pred_depth = pred_depth[mask]
         gt_depth_part = crop_center(gt_depth)
         gt_depth = gt_depth[mask]
-        
 
         pred_depth *= opt.pred_depth_scale_factor
         if opt.median_scaling:
