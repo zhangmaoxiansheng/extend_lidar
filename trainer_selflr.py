@@ -72,6 +72,10 @@ class Trainer:
                 self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w,self.crop_mode,self.dropout)
             elif self.opt.refine_model == 'i':
                 self.models["mid_refine"] = networks.Iterative_Propagate(self.crop_h,self.crop_w,self.crop_mode,False)
+            elif self.opt.refine_model == 'is':
+                self.models["mid_refine"] = networks.Iterative_Propagate_seq(self.crop_h,self.crop_w,self.crop_mode,False)
+            elif self.opt.refine_model == 'io':
+                self.models["mid_refine"] = networks.Iterative_Propagate_old(self.crop_h,self.crop_w,self.crop_mode,False)
 
             self.models["mid_refine"].to(self.device)
             self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
