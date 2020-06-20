@@ -153,7 +153,10 @@ def evaluate(opt):
                     # Post-processed results require each image to have two forward passes
                     input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
 
-                output = depth_decoder(encoder(input_color))
+                depth_part_gt =  F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
+                input_rgbd = torch.cat((input_color,depth_part_gt),1)
+                output = depth_decoder(encoder(input_rgbd))
+                #output = depth_decoder(encoder(input_color))
                 output_disp = output[("disp", 0)]
 
                 if refine:
@@ -256,7 +259,7 @@ def evaluate(opt):
 
         errors.append(compute_errors(gt_depth, pred_depth))
 
-    if not opt.disable_median_scaling:
+    if opt.median_scaling or opt.center_median_scaling:
         ratios = np.array(ratios)
         med = np.median(ratios)
         print(" Scaling ratios | med: {:0.3f} | std: {:0.3f}".format(med, np.std(ratios / med)))

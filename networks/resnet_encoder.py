@@ -12,6 +12,22 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 import torch.utils.model_zoo as model_zoo
+class Conv3x3(nn.Module):
+    """Layer to pad and convolve input
+    """
+    def __init__(self, in_channels, out_channels, dilation = 1,use_refl=True):
+        super(Conv3x3, self).__init__()
+
+        if use_refl:
+            self.pad = nn.ReflectionPad2d(dilation)
+        else:
+            self.pad = nn.ZeroPad2d(dilation)
+        self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3,dilation=dilation)
+
+    def forward(self, x):
+        out = self.pad(x)
+        out = self.conv(out)
+        return out
 
 
 class ResNetMultiImageInput(models.ResNet):
@@ -83,10 +99,19 @@ class ResnetEncoder(nn.Module):
 
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
+        self.num_input_images = num_input_images
+        self.pre_conv = Conv3x3(4,3)
 
     def forward(self, input_image):
         self.features = []
+        if input_image.shape[1] == 4:
+            other_channel = input_image[:,3,:,:]
+            other_channel = other_channel.unsqueeze(1)
+            input_image = input_image[:,:3,:,:]
+            
         x = (input_image - 0.45) / 0.225
+        if input_image.shape[1] == 4:
+            x = self.pre_conv(torch.cat([x,other_channel],1))
         x = self.encoder.conv1(x)
         x = self.encoder.bn1(x)
         self.features.append(self.encoder.relu(x))
