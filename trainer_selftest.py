@@ -24,17 +24,24 @@ from layers import *
 import datasets
 import networks
 import scipy.io as scio 
-import copy
 #from IPython import embed
+from PnP_pose import PnP
+import cv2
+import copy
+cv2.setNumThreads(0)
 
 
 class Trainer:
     def __init__(self, options):
         self.opt = options
-        self.inv_refine = options.inv_refine
-        self.refine_dep = options.refine_dep
-        self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
+        self.dropout = options.dropout
+        self.refine_stage = list(range(options.refine_stage))
+        self.refine = options.refine
         self.crop_mode = options.crop_mode
+        self.gan = options.gan
+        self.gan2 = options.gan2
+        self.edge_refine = options.edge_refine
+        self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
 
         # checking height and width are multiples of 32
         assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
@@ -43,6 +50,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
         self.parameters_to_train_refine = []
+
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
 
@@ -53,64 +61,92 @@ class Trainer:
         assert self.opt.frame_ids[0] == 0, "frame_ids must start with 0"
 
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
+        if self.refine:
+            if len(self.refine_stage) > 4:
+                self.crop_h = [96,128,160,192,192]
+                self.crop_w = [192,256,384,448,640]
+            else:
+                self.crop_h = [96,128,160,192]
+                self.crop_w = [192,256,384,640]
+            if self.opt.refine_model == 's':
+                self.models["mid_refine"] = networks.Simple_Propagate(self.crop_h,self.crop_w,self.crop_mode,self.dropout)
+            elif self.opt.refine_model == 'i':
+                self.models["mid_refine"] = networks.Iterative_Propagate(self.crop_h,self.crop_w,self.crop_mode,False)
+            elif self.opt.refine_model == 'is':
+                self.models["mid_refine"] = networks.Iterative_Propagate_seq(self.crop_h,self.crop_w,self.crop_mode,False)
+            elif self.opt.refine_model == 'io':
+                self.models["mid_refine"] = networks.Iterative_Propagate_old(self.crop_h,self.crop_w,self.crop_mode,False)
+
+            self.models["mid_refine"].to(self.device)
+            self.parameters_to_train_refine += list(self.models["mid_refine"].parameters())
+            if self.gan:
+                self.models["netD"] = networks.Discriminator()
+                self.models["netD"].to(self.device)
+                self.parameters_D = list(self.models["netD"].parameters())
+            if self.gan2:
+                self.models["netD"] = networks.Discriminator_group()
+                self.models["netD"].to(self.device)
+                self.parameters_D = list(self.models["netD"].parameters())
 
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained", num_input_images=1)
         self.models["encoder"].to(self.device)
-        if not self.refine_dep:
-            self.parameters_to_train += list(self.models["encoder"].parameters())
+        self.parameters_to_train += list(self.models["encoder"].parameters())
+        self.parameters_to_train_refine += list(self.models["encoder"].parameters())
+        
 
         self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales,refine=self.inv_refine)
+            self.models["encoder"].num_ch_enc, self.opt.scales,refine=self.refine)
         self.models["depth"].to(self.device)
-        if not self.refine_dep:
-            self.parameters_to_train += list(self.models["depth"].parameters())
+        self.parameters_to_train += list(self.models["depth"].parameters())
+        self.parameters_to_train_refine += list(self.models["depth"].parameters())
 
-        if self.use_pose_net:
-            if self.opt.pose_model_type == "separate_resnet":
-                self.models["pose_encoder"] = networks.ResnetEncoder(
-                    self.opt.num_layers,
-                    self.opt.weights_init == "pretrained",
-                    num_input_images=self.num_pose_frames)
+        self.models["pose_encoder"] = networks.ResnetEncoder(self.opt.num_layers,self.opt.weights_init == "pretrained",num_input_images=self.num_pose_frames)
+        self.models["pose_encoder"].to(self.device)
+        self.parameters_to_train += list(self.models["pose_encoder"].parameters())
+        if self.refine:
+            for param in self.models["pose_encoder"].parameters():
+                param.requeires_grad = False
 
-                self.models["pose_encoder"].to(self.device)
-                self.parameters_to_train += list(self.models["pose_encoder"].parameters())
+        self.models["pose"] = networks.PoseDecoder(self.models["pose_encoder"].num_ch_enc,num_input_features=1,num_frames_to_predict_for=2)
+        self.models["pose"].to(self.device)
+        self.parameters_to_train += list(self.models["pose"].parameters())
+        if self.refine:
+            for param in self.models["pose"].parameters():
+                param.requeires_grad = False
 
-                self.models["pose"] = networks.PoseDecoder(
-                    self.models["pose_encoder"].num_ch_enc,
-                    num_input_features=1,
-                    num_frames_to_predict_for=2)
-
-            elif self.opt.pose_model_type == "shared":
-                self.models["pose"] = networks.PoseDecoder(
-                    self.models["encoder"].num_ch_enc, self.num_pose_frames)
-
-            elif self.opt.pose_model_type == "posecnn":
-                self.models["pose"] = networks.PoseCNN(
-                    self.num_input_frames if self.opt.pose_model_input == "all" else 2)
-
-            self.models["pose"].to(self.device)
-            self.parameters_to_train += list(self.models["pose"].parameters())
+        
+        if self.refine:
+            self.models["depth_nograd"] = networks.DepthDecoder(
+            self.models["encoder"].num_ch_enc, self.opt.scales,refine=self.refine)
+            self.models["depth_nograd"].to(self.device)
+            for param in self.models["depth_nograd"].parameters():
+                param.requeires_grad = False
+            
+            self.models["encoder_nograd"] = networks.ResnetEncoder(
+            self.opt.num_layers, self.opt.weights_init == "pretrained", num_input_images=1)
+            self.models["encoder_nograd"].to(self.device)
+            for param in self.models["encoder_nograd"].parameters():
+                param.requeires_grad = False
+        if self.refine:
+            parameters_to_train = self.parameters_to_train_refine
+        else:
+            parameters_to_train = self.parameters_to_train  
         
         if self.opt.load_weights_folder is not None:
-            self.load_model()
-        if self.inv_refine or self.refine_dep:
-            self.models["encoder_ref"] = copy.deepcopy(self.models["encoder"])
-            for param in self.models["encoder"].parameters():
-                param.requeires_grad=False
-            self.parameters_to_train += list(self.models["encoder_ref"].parameters())
-            self.models["encoder_ref"].to(self.device)
-            self.models["depth_ref"] = copy.deepcopy(self.models["depth"])
-            for param in self.models["depth"].parameters():
-                param.requeires_grad=False
-            self.models["depth_ref"].to(self.device)
-            self.parameters_to_train += list(self.models["depth_ref"].parameters())
-
-        parameters_to_train = self.parameters_to_train
+            self.load_model() 
         self.model_optimizer = optim.Adam(parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
 
+        if self.gan or self.gan2:
+            self.D_optimizer = optim.Adam(self.parameters_D, 1e-4)
+            self.model_lr_scheduler_D = optim.lr_scheduler.StepLR(
+            self.D_optimizer, self.opt.scheduler_step_size, 0.1)
+            if self.gan:
+                self.pix2pix = networks.pix2pix_loss_iter(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
+            else:
+                self.pix2pix = networks.pix2pix_loss_iter2(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
@@ -131,13 +167,13 @@ class Trainer:
 
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, refine=False, crop_mode=self.crop_mode)
+            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode, crop_h=self.crop_h, crop_w=self.crop_w)
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, refine=False, crop_mode=self.crop_mode)
+            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, refine=self.refine, crop_mode=self.crop_mode, crop_h=self.crop_h, crop_w=self.crop_w)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
@@ -153,9 +189,10 @@ class Trainer:
 
         self.backproject_depth = {}
         self.project_3d = {}
-        for scale in self.opt.scales:
-            h = self.opt.height // (2 ** scale)
-            w = self.opt.width // (2 ** scale)
+
+        for scale in self.refine_stage:
+            h = self.crop_h[scale]
+            w = self.crop_w[scale]
 
             self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w)
             self.backproject_depth[scale].to(self.device)
@@ -187,10 +224,11 @@ class Trainer:
     def train(self):
         """Run the entire training pipeline
         """
-        self.epoch = 0
+        if self.opt.load_weights_folder is None:
+            self.epoch = 0
         self.step = 0
         self.start_time = time.time()
-        for self.epoch in range(self.opt.num_epochs):
+        for self.epoch in range(self.epoch, self.epoch + self.opt.num_epochs):
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
@@ -207,70 +245,81 @@ class Trainer:
             before_op_time = time.time()
 
             outputs, losses = self.process_batch(inputs)
-
-            self.model_optimizer.zero_grad()
-            losses["loss"].backward()
-            self.model_optimizer.step()
+            
+            if self.gan or self.gan2:
+                self.pix2pix(inputs, outputs, losses, self.epoch)
+            else:
+                self.model_optimizer.zero_grad()
+                losses["loss"].backward()
+                self.model_optimizer.step()
 
             duration = time.time() - before_op_time
-
+            
             # log less frequently after the first 2000 steps to save time & disk space
-            early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000
+            early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000
             late_phase = self.step % 2000 == 0
 
-            if early_phase or late_phase:
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+            if (self.gan or self.gan2) and batch_idx % self.opt.log_frequency :
+                if outputs["D_update"]:
+                    self.log_time(batch_idx, duration, losses["loss/D_total"].cpu().data)
+                if outputs["G_update"]:
+                    self.log_time(batch_idx, duration, losses["loss/G_total"].cpu().data)
+            self.log_time(batch_idx, duration, losses["loss"].cpu().data)
 
+            if early_phase or late_phase:
+                #self.log_time(batch_idx, duration, losses["loss"].cpu().data)
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
 
                 self.log("train", inputs, outputs, losses)
-                self.val()
-
+                #self.val()
             self.step += 1
         self.model_lr_scheduler.step()
+            
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
         """
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
+        inputs["depth_gt_part"] =  F.interpolate(inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
+        with torch.no_grad():
+            features = self.models["encoder_nograd"](torch.cat((inputs["color_aug", 0, 0],inputs["depth_gt_part"]),1))
+            outputs = self.models["depth_nograd"](features)
 
-        depth_part_gt =  F.interpolate(
-                    inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
-        if not self.refine_dep:
-            features = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],depth_part_gt),1))
-            outputs = self.models["depth"](features)
-
-        if self.inv_refine:
-            with torch.no_grad():
-                features_nograd = self.models["encoder_nograd"](torch.cat((inputs["color_aug", 0, 0],depth_part_gt),1))
-                outputs_nograd = self.models["depth_nograd"](features_nograd)
-                disp_blur = outputs_nograd[("disp", 0)]
-                features = None
-                inputs["depth_gt_part"] = F.interpolate(inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
-                disp_part_gt = depth_to_disp(inputs["depth_gt_part"] ,self.opt.min_depth,self.opt.max_depth)
-                
-                outputs_ref = self.models["mid_refine"](outputs_nograd["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage)
-                outputs["dense_gt"] = F.interpolate(outputs_ref[("disp",0)], [self.opt.height, self.opt.width], mode="bilinear")
-                
-                #outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
-                #_,outputs["dense_gt"] = disp_to_depth(outputs["dense_gt"],self.opt.min_depth,self.opt.max_depth)
-        if self.refine_dep:
-            with torch.no_grad():
-                features_nograd = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],depth_part_gt),1))
-                outputs_nograd = self.models["depth"](features_nograd)
-                disp_blur = outputs_nograd[("disp", 0)]
-                _, depth_blur = disp_to_depth(disp_blur,self.opt.min_depth,self.opt.max_depth)
-            features = self.models["encoder_ref"](torch.cat((inputs["color_aug", 0, 0],depth_blur),1))
-            outputs = self.models["depth_ref"](features)
-            outputs["dense_gt"] = F.interpolate(disp_blur, [self.opt.height, self.opt.width], mode="bilinear")
-
-        
+        if self.refine:
+            disp_blur = outputs[("disp", 0)]
+            _, depth_blur = disp_to_depth(disp_blur,self.opt.min_depth,self.opt.max_depth)
+            disp_part_gt = depth_to_disp(inputs["depth_gt_part"] ,self.opt.min_depth,self.opt.max_depth)
+            if (self.gan or self.gan2) and self.epoch % 2 != 0 and self.epoch > self.pix2pix.start_gan and self.epoch < self.pix2pix.stop_gan:
+                with torch.no_grad():
+                    features = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],disp_blur),1))
+                    outputs.update(self.models["depth"](features,self.dropout))
+                    outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
+            else:
+                features = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],disp_blur),1))
+                outputs.update(self.models["depth"](features,self.dropout))
+                outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
+            outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
+            _,outputs["dense_gt"] = disp_to_depth(outputs["dense_gt"],self.opt.min_depth,self.opt.max_depth)
         if self.use_pose_net:
             outputs.update(self.predict_poses(inputs, features))
+
+        for i in self.opt.frame_ids:
+            origin_color = inputs[("color",i,0)].clone()
+            for s in self.refine_stage:
+                inputs[("color",i,s)] = self.crop(origin_color,self.crop_h[s],self.crop_w[s])
+        
         self.generate_images_pred(inputs, outputs)
         losses = self.compute_losses(inputs, outputs)
+        if 'scale_list' in dir(self.models["mid_refine"]):
+            scale_list = self.models["mid_refine"].scale_list
+            if scale_list:
+                print(scale_list[0].shape)
+                scale_loss = 1 - torch.cat((scale_list),0).mean()
+                losses["loss"] += scale_loss * 0.2 
+        if self.refine:
+            losses["loss/scale"] = outputs["scale"]
 
         return outputs, losses
 
@@ -283,10 +332,8 @@ class Trainer:
             # separate forward pass through the pose network.
 
             # select what features the pose network takes as input
-            if self.opt.pose_model_type == "shared":
-                pose_feats = {f_i: features[f_i] for f_i in self.opt.frame_ids}
-            else:
-                pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
+            
+            pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
 
             for f_i in self.opt.frame_ids[1:]:
                 if f_i != "s":
@@ -298,9 +345,6 @@ class Trainer:
 
                     if self.opt.pose_model_type == "separate_resnet":
                         pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
-                    elif self.opt.pose_model_type == "posecnn":
-                        pose_inputs = torch.cat(pose_inputs, 1)
-
                     axisangle, translation = self.models["pose"](pose_inputs)
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
@@ -316,19 +360,22 @@ class Trainer:
                     [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
 
                 if self.opt.pose_model_type == "separate_resnet":
-                    pose_inputs = [self.models["pose_encoder"](pose_inputs)]
+                    if self.refine:
+                        with torch.no_grad():
+                            pose_inputs = [self.models["pose_encoder"](pose_inputs)]
 
-            elif self.opt.pose_model_type == "shared":
-                pose_inputs = [features[i] for i in self.opt.frame_ids if i != "s"]
-
-            axisangle, translation = self.models["pose"](pose_inputs)
+            if self.refine:
+                with torch.no_grad():
+                    axisangle, translation = self.models["pose"](pose_inputs)
 
             for i, f_i in enumerate(self.opt.frame_ids[1:]):
                 if f_i != "s":
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
+                    
+                    pose_scale = 1 / outputs['scale']
                     outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
-                        axisangle[:, i], translation[:, i], outputs['scale'])
+                        axisangle[:, i], translation[:, i], invert=(f_i < 0), scale=pose_scale)
 
         return outputs
 
@@ -352,85 +399,35 @@ class Trainer:
             del inputs, outputs, losses
 
         self.set_train()
-    def generate_images_pred_simple(self, inputs, outputs):
-        """Generate the warped (reprojected) color images for a minibatch.
-        Generated images are saved into the `outputs` dictionary.
-        """        
-        #disp = outputs["disp",'r']
-        disp = outputs["blur_disp"]
-        _, depth = disp_to_depth(disp,self.opt.min_depth,self.opt.max_depth)
-        outputs["blur_depth"] = depth
-        source_scale = 0
-        scale = "r"
-        for i, frame_id in enumerate(self.opt.frame_ids[1:]):
-            T_origin = outputs[("cam_T_cam", 0, frame_id)]
-            T  = T_origin.clone()
-            T[:,:3,3] = T_origin[:,:3,3] * outputs['scale']
-
-            cam_points = self.backproject_depth[source_scale](
-                    depth, inputs[("inv_K", source_scale)])
-            pix_coords = self.project_3d[source_scale](
-                    cam_points, inputs[("K", source_scale)], T)
-            outputs[("sample", frame_id, scale)] = pix_coords
-            outputs[("color", frame_id, scale)] = F.grid_sample(
-                inputs[("color", frame_id, source_scale)],
-                outputs[("sample", frame_id, scale)],
-                padding_mode="border")
-
-            if not self.opt.disable_automasking:
-                outputs[("color_identity", frame_id, scale)] = \
-                    inputs[("color", frame_id, source_scale)]
-
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch.
         Generated images are saved into the `outputs` dictionary.
         """
-        for scale in self.opt.scales:
+        
+        for scale in self.refine_stage:
             disp = outputs[("disp", scale)]
-            if self.opt.v1_multiscale:
-                source_scale = scale
-            else:
-                disp = F.interpolate(
-                    disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                source_scale = 0
 
             _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
             outputs[("depth", 0, scale)] = depth
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
+                T = outputs[("cam_T_cam", 0, frame_id)]
 
-                if frame_id == "s":
-                    T = inputs["stereo_T"]
-                else:
-                    T = outputs[("cam_T_cam", 0, frame_id)]
-
-                # from the authors of https://arxiv.org/abs/1712.00175
-                if self.opt.pose_model_type == "posecnn":
-
-                    axisangle = outputs[("axisangle", 0, frame_id)]
-                    translation = outputs[("translation", 0, frame_id)]
-
-                    inv_depth = 1 / depth
-                    mean_inv_depth = inv_depth.mean(3, True).mean(2, True)
-
-                    T = transformation_from_parameters(
-                        axisangle[:, 0], translation[:, 0] * mean_inv_depth[:, 0], frame_id < 0)
-
-                cam_points = self.backproject_depth[source_scale](
-                    depth, inputs[("inv_K", source_scale)])
-                pix_coords = self.project_3d[source_scale](
-                    cam_points, inputs[("K", source_scale)], T)
+                cam_points = self.backproject_depth[scale](
+                    depth, inputs[("inv_K", scale)])
+                pix_coords = self.project_3d[scale](
+                    cam_points, inputs[("K", scale)], T)
 
                 outputs[("sample", frame_id, scale)] = pix_coords
 
                 outputs[("color", frame_id, scale)] = F.grid_sample(
-                    inputs[("color", frame_id, source_scale)],
+                    inputs[("color", frame_id, scale)],
                     outputs[("sample", frame_id, scale)],
                     padding_mode="border")
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
-                        inputs[("color", frame_id, source_scale)]
+                        inputs[("color", frame_id, scale)]
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -451,38 +448,44 @@ class Trainer:
         """
         losses = {}
         total_loss = 0
-        scales = self.opt.scales.copy()
+        stage_weight = [1,1,1.5,2]
+        if len(self.refine_stage) > 4:
+            #stage_weight = [1,1,1.2,1.2,2]
+            stage_weight = [1,1,1.2,1.2,1.5]
+            #stage_weight = [0.25,0.5,0.8,1,1.5]
+
+       
+        for scale in self.refine_stage:
         
-        for scale in scales:
+            h = self.crop_h[scale]
+            w = self.crop_w[scale]
+            
             loss = 0
             reprojection_losses = []
 
             source_scale = 0
             color = inputs[("color", 0, scale)]
-            
             disp = outputs[("disp", scale)]
-            target = inputs[("color", 0, source_scale)]
+            disp_pred = disp
+            warning = torch.sum(torch.isnan(disp))
+            if warning:
+                print("nan in disppred")
+            disp_target = self.crop(outputs["blur_disp"],h,w)
+
+            target = inputs[("color", 0, scale)]
             depth_pred = outputs[("depth", 0, scale)]
-            disp_pred = F.interpolate(
-                    disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-            depth_pred = F.interpolate(
-                    depth_pred, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-            depth_part_gt =  F.interpolate(
-                    inputs["depth_gt_part"], [self.opt.height, self.opt.width], mode="nearest")
-            disp_part_gt = depth_to_disp(depth_part_gt,self.opt.min_depth,self.opt.max_depth)
-            mask = disp_part_gt>0
+
+            disp_part_gt = self.crop(outputs["disp_gt_part"],h,w)
+            mask = disp_part_gt > 0
             depth_loss = torch.abs(disp_pred[mask] - disp_part_gt[mask]).mean()
             losses["loss/depth_{}".format(scale)] = depth_loss
             depth_loss = depth_loss
-            if self.inv_refine:
-                
-                depth_loss_refine = torch.abs(disp_pred-outputs["dense_gt"]).mean()
-                depth_loss += depth_loss_refine
-            if self.refine_dep:
-                disp_target = outputs["dense_gt"] 
-                depth_ssim_loss = self.ssim(disp_pred, disp_target).mean()
-                depth_l1_loss = torch.abs(disp_pred - disp_target).mean()
-                depth_loss += 0.5*depth_ssim_loss + 0.5*depth_l1_loss
+            if self.refine:   
+                depth_l1_loss = torch.mean((disp - disp_target).abs())
+                depth_ssim_loss = self.ssim(disp, disp_target).mean()
+                depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15
+                #depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15
+                losses["loss/depth_ssim{}".format(scale)] = depth_ssim_loss
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
@@ -493,7 +496,7 @@ class Trainer:
             if not self.opt.disable_automasking:
                 identity_reprojection_losses = []
                 for frame_id in self.opt.frame_ids[1:]:
-                    pred = inputs[("color", frame_id, source_scale)]
+                    pred = inputs[("color", frame_id, scale)]
                     identity_reprojection_losses.append(
                         self.compute_reprojection_loss(pred, target))
 
@@ -504,25 +507,8 @@ class Trainer:
                 else:
                     # save both images, and do min all at once below
                     identity_reprojection_loss = identity_reprojection_losses
-
-            elif self.opt.predictive_mask:
-                # use the predicted mask
-                mask = outputs["predictive_mask"]["disp", scale]
-                if not self.opt.v1_multiscale:
-                    mask = F.interpolate(
-                        mask, [self.opt.height, self.opt.width],
-                        mode="bilinear", align_corners=False)
-
-                reprojection_losses *= mask
-
-                # add a loss pushing mask to 1 (using nn.BCELoss for stability)
-                weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).cuda())
-                loss += weighting_loss.mean()
-
-            if self.opt.avg_reprojection:
-                reprojection_loss = reprojection_losses.mean(1, keepdim=True)
-            else:
-                reprojection_loss = reprojection_losses
+            
+            reprojection_loss = reprojection_losses
 
             if not self.opt.disable_automasking:
                 # add random numbers to break ties
@@ -532,6 +518,7 @@ class Trainer:
                 combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
             else:
                 combined = reprojection_loss
+
             if combined.shape[1] == 1:
                 to_optimise = combined
             else:
@@ -546,13 +533,23 @@ class Trainer:
             norm_disp = disp / (mean_disp + 1e-7)
             grad_disp_x, grad_disp_y, grad_disp_x2, grad_disp_y2 = get_smooth_loss(norm_disp, color)
             smooth_loss = grad_disp_x.mean() + grad_disp_y.mean()
+            if self.edge_refine and scale == self.refine_stage[-1]:
+                mask_edge = F.interpolate(inputs["mask_edge"],(self.opt.height,self.opt.width))
+                mask_edge_x2 = mask_edge[:,:,:,:-2]
+                mask_edge_y2 = mask_edge[:,:,:-2,:]
+                smooth_loss_edge = torch.mean(grad_disp_x2[mask_edge_x2>0]) + torch.mean(grad_disp_y2[mask_edge_y2>0])
+                loss += self.opt.disparity_smoothness * smooth_loss_edge * 5
             
+            # if self.refine_stage:
+            #     loss += self.opt.disparity_smoothness * smooth_loss
+            # else:
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
+                
             loss += depth_loss
-            total_loss += loss
-            losses["loss/{}".format(scale)] = loss
 
-        total_loss /= self.num_scales
+            total_loss += loss * stage_weight[scale]
+            losses["loss/{}".format(scale)] = loss
+        total_loss /= len(self.refine_stage)
         losses["loss"] = total_loss
         return losses
 
@@ -562,8 +559,11 @@ class Trainer:
         This isn't particularly accurate as it averages over the entire batch,
         so is only used to give an indication of validation performance
         """
-        
-        depth_pred = outputs[("depth", 0, 0)]
+        if self.refine:
+            s = self.refine_stage[-1]
+            depth_pred = outputs[("depth", 0, s)]
+        else:
+            depth_pred = outputs[("depth", 0, 0)]
         depth_pred = torch.clamp(F.interpolate(
             depth_pred, [375, 1242], mode="bilinear", align_corners=False), 1e-3, 80)
         depth_pred = depth_pred.detach()
@@ -578,7 +578,7 @@ class Trainer:
 
         depth_gt = depth_gt[mask]
         depth_pred = depth_pred[mask]
-        depth_pred *= torch.median(depth_gt) / torch.median(depth_pred)
+        #depth_pred *= torch.median(depth_gt) / torch.median(depth_pred)  //fuck!
 
         depth_pred = torch.clamp(depth_pred, min=1e-3, max=80)
 
@@ -603,13 +603,43 @@ class Trainer:
         """Write an event to the tensorboard events file
         """
         writer = self.writers[mode]
-        scales_ = self.opt.scales.copy()
-        
+        scales_ = self.refine_stage
+        # if self.refine:
+        #     scales_.append('r')
         for l, v in losses.items():
             writer.add_scalar("{}".format(l), v, self.step)
 
         for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
+            #if self.refine:
+                #writer.add_image("disp_mid{}".format(j),normalize_image(outputs["disp_all_in"][j]), self.step)
+                # writer.add_image("disp_part_gt{}".format(j),normalize_image(outputs["part_gt"][j]), self.step)
+                #save_name = ('./part_gt/%d_%d_partgt.mat'%(self.step,j))
+                #save_name2 = ('./part_gt/%d_%d_dep.mat'%(self.step,j))
+                #save_name3 = ('./part_gt/%d_%d_mid.mat'%(self.step,j))
+                # save_name4 = ('./part_gt/%d_%d_disp.mat'%(self.step,j))
+                # save_name5 = ('./part_gt/%d_%d_depthall.mat'%(self.step,j))
+                #depth_part_gt = np.asarray(inputs["depth_gt_part"][j].squeeze().cpu())
+                #part_gt = np.asarray(outputs["part_gt"][j].squeeze().cpu())
+                #disp_last0 = outputs[("dep_last", 0)][j].squeeze().detach().cpu().numpy()
+                # mid = np.asarray(outputs["disp_all_in"][j].squeeze().detach())
+                # disp0 = outputs[("disp", 0)][j].squeeze().detach().cpu().numpy()
+                # depth_all_gt = F.interpolate(inputs["depth_gt"], [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                # all_gt = depth_all_gt[j].squeeze().detach().cpu().numpy()
+                #scio.savemat(save_name, {'part_disp_gt':part_gt})
+                #scio.savemat(save_name2, {'part_gt_dep':depth_part_gt})
+                #scio.savemat(save_name3, {'mid':disp_last0})
+                # scio.savemat(save_name4, {'disp':disp0})
+                # scio.savemat(save_name5, {'depth':all_gt})
+                # writer.add_image("disp_part_mask{}".format(j),normalize_image(outputs["part_mask"][j]), self.step)
+                #writer.add_image("ref_pred_img",outputs[("color", -1, 'r')][j].data, self.step)
             for s in scales_:
+                # disp_part_gt = np.asarray(outputs["disp_part_gt_{}".format(s)][j].squeeze().cpu())
+                # depth_part_gt = np.asarray(outputs["depth_part_gt_{}".format(s)][j].squeeze().cpu())
+                # save_name1 = ('./part_gt/%d_%d_%d_deppartgt.mat'%(self.step,j,s))
+                # save_name2 = ('./part_gt/%d_%d_%d_disppartgt.mat'%(self.step,j,s))
+                # scio.savemat(save_name1, {'depth_part_gt':depth_part_gt})
+                # scio.savemat(save_name2, {'disp_part_gt':disp_part_gt})
+
                 for frame_id in self.opt.frame_ids:
                     if s != 'r':
                         writer.add_image(
@@ -661,6 +691,7 @@ class Trainer:
                 to_save['height'] = self.opt.height
                 to_save['width'] = self.opt.width
                 to_save['use_stereo'] = self.opt.use_stereo
+                to_save['epoch'] = self.epoch
             torch.save(to_save, save_path)
 
         save_path = os.path.join(save_folder, "{}.pth".format("adam"))
@@ -681,6 +712,10 @@ class Trainer:
             if os.path.exists(path):
                 model_dict = self.models[n].state_dict()
                 pretrained_dict = torch.load(path)
+                if 'epoch' in pretrained_dict.keys():
+                    self.epoch = pretrained_dict['epoch']
+                else:
+                    self.epoch = 0
                 pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
                 model_dict.update(pretrained_dict)
                 self.models[n].load_state_dict(model_dict)
@@ -693,3 +728,21 @@ class Trainer:
         #     self.model_optimizer.load_state_dict(optimizer_dict)
         # else:
         #     print("Cannot find Adam weights so Adam is randomly initialized")
+    
+    def crop(self,image,h=160,w=320):
+        origin_h = image.size(2)
+        origin_w = image.size(3)
+        if self.crop_mode=='c' or self.crop_mode=='s' or self.crop_mode=='r':
+            h_start = max(int(round((origin_h-h)/2)),0)
+            h_end = min(h_start + h,origin_h)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:h_end,w_start:w_end] 
+        elif self.crop_mode=='b':
+            origin_h = image.size(2)
+            origin_w = image.size(3)
+            h_start = max(int(round(origin_h-h)),0)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:,w_start:w_end] 
+        return output

@@ -103,6 +103,9 @@ def evaluate(opt):
             crop_h = None
             crop_w = None
         encoder_dict = torch.load(encoder_path)
+        if not 'height' in encoder_dict.keys():
+            encoder_dict['height'] = opt.height
+            encoder_dict['width'] = opt.width
 
         dataset = datasets.KITTIDepthDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
@@ -111,7 +114,7 @@ def evaluate(opt):
                                 pin_memory=True, drop_last=False)
 
         encoder = networks.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc,refine=refine)
+        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc,refine=refine)            
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
@@ -121,6 +124,19 @@ def evaluate(opt):
         encoder.eval()
         depth_decoder.cuda()
         depth_decoder.eval()
+        if opt.refine_dep:
+            encoder_nogard = networks.ResnetEncoder(opt.num_layers, False)
+            depth_decoder_nograd = networks.DepthDecoder(encoder.num_ch_enc,refine=refine)
+            encoder_path = os.path.join(opt.load_weights_folder, "encoder_nograd.pth")
+            decoder_path = os.path.join(opt.load_weights_folder, "depth_nograd.pth")
+            encoder_nograd_dict = torch.load(encoder_path)
+            model_dict = encoder_nogard.state_dict()
+            encoder_nogard.load_state_dict({k:v for k,v in model_dict.items() if k in model_dict})
+            depth_decoder_nograd.load_state_dict(torch.load(decoder_path))
+            encoder_nogard.cuda()
+            encoder_nogard.eval()
+            depth_decoder_nograd.cuda()
+            depth_decoder_nograd.eval()
         if refine:
             renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
             if opt.refine_model == 'i':
@@ -154,18 +170,27 @@ def evaluate(opt):
 
                 depth_part_gt =  F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
                 input_rgbd = torch.cat((input_color,depth_part_gt),1)
-                output = depth_decoder(encoder(input_rgbd))
-                #output = depth_decoder(encoder(input_color))
-                output_disp = output[("disp", 0)]
 
-                if refine:
-                    disp_blur = output[("disp", 0)]
-                    features = output["disp_feature"]
-                    depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
-                    disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
-                    output = mid_refine(features,disp_blur, disp_part_gt,input_color,opt.refine_stage)
-                    final_stage = opt.refine_stage[-1]
-                    output_disp = output[("disp", final_stage)]
+                if opt.refine_dep:
+                    output = depth_decoder_nograd(encoder_nogard(input_rgbd))
+                    output_disp = output[("disp",0)]
+                    depth_full = F.interpolate(output_disp, [opt.height, opt.width], mode="bilinear")
+                    input_rgbd2 = torch.cat((input_color,depth_full),1)
+                    output = depth_decoder(encoder(input_rgbd2))
+                    output_disp = output[("disp", 0)]
+                else:
+                    output = depth_decoder(encoder(input_rgbd))
+                    #output = depth_decoder(encoder(input_color))
+                    output_disp = output[("disp", 0)]
+
+                    if refine:
+                        disp_blur = output[("disp", 0)]
+                        features = output["disp_feature"]
+                        depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
+                        disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
+                        output = mid_refine(features,disp_blur, disp_part_gt,input_color,opt.refine_stage)
+                        final_stage = opt.refine_stage[-1]
+                        output_disp = output[("disp", final_stage)]
                     
                 pred_disp, _ = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
                 

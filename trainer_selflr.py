@@ -92,9 +92,7 @@ class Trainer:
             self.opt.num_layers, self.opt.weights_init == "pretrained", num_input_images=1)
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
-        if self.refine:
-            for param in self.models["encoder"].parameters():
-                param.requeires_grad = False
+        
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales,refine=self.refine)
@@ -115,12 +113,24 @@ class Trainer:
             for param in self.models["pose"].parameters():
                 param.requeires_grad = False
 
+        if self.opt.load_weights_folder is not None:
+            self.load_model()
+        if self.refine:
+            self.models["depth_ref"] = copy.deepcopy(self.models["depth"])
+            self.models["depth_ref"].to(self.device)
+            self.parameters_to_train_refine += list(self.models["depth_ref"].parameters())
+            for param in self.models["depth"].parameters():
+                param.requeires_grad = False
+            
+            self.models["encoder_ref"] = copy.deepcopy(self.models["encoder"])
+            self.models["encoder_ref"].to(self.device)
+            self.parameters_to_train_refine += list(self.models["encoder_ref"].parameters())
+            for param in self.models["encoder"].parameters():
+                param.requeires_grad = False
         if self.refine:
             parameters_to_train = self.parameters_to_train_refine
         else:
-            parameters_to_train = self.parameters_to_train      
-
-        
+            parameters_to_train = self.parameters_to_train   
         self.model_optimizer = optim.Adam(parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
@@ -133,16 +143,6 @@ class Trainer:
                 self.pix2pix = networks.pix2pix_loss_iter(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
             else:
                 self.pix2pix = networks.pix2pix_loss_iter2(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
-
-        if self.opt.load_weights_folder is not None:
-            self.load_model()
-        if self.refine:
-            self.models["depth_ref"] = copy.deepcopy(self.models["depth"])
-            self.models["depth_ref"].to(self.device)
-            self.parameters_to_train_refine += list(self.models["depth_ref"].parameters())
-            for param in self.models["depth"].parameters():
-                param.requeires_grad = False
-
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
@@ -285,12 +285,15 @@ class Trainer:
 
         if self.refine:
             disp_blur = outputs[("disp", 0)]
+            _, depth_blur = disp_to_depth(disp_blur,self.opt.min_depth,self.opt.max_depth)
             disp_part_gt = depth_to_disp(inputs["depth_gt_part"] ,self.opt.min_depth,self.opt.max_depth)
             if (self.gan or self.gan2) and self.epoch % 2 != 0 and self.epoch > self.pix2pix.start_gan and self.epoch < self.pix2pix.stop_gan:
                 with torch.no_grad():
+                    #features = self.models["encoder_ref"](torch.cat((inputs["color_aug", 0, 0],inputs["depth_gt_part"]),1))
                     outputs.update(self.models["depth_ref"](features,self.dropout))
                     outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             else:
+                #features = self.models["encoder_ref"](torch.cat((inputs["color_aug", 0, 0],inputs["depth_gt_part"]),1))
                 outputs.update(self.models["depth_ref"](features,self.dropout))
                 outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
@@ -443,8 +446,8 @@ class Trainer:
         total_loss = 0
         stage_weight = [1,1,1.5,2]
         if len(self.refine_stage) > 4:
-            stage_weight = [1,1,1.2,1.2,2]
-            #stage_weight = [1,1,1.2,1.2,1.5]
+            #stage_weight = [1,1,1.2,1.2,2]
+            stage_weight = [1,1,1.2,1.2,1.5]
             #stage_weight = [0.25,0.5,0.8,1,1.5]
 
        
@@ -476,7 +479,7 @@ class Trainer:
             if self.refine:   
                 depth_l1_loss = torch.mean((disp - disp_target).abs())
                 depth_ssim_loss = self.ssim(disp, disp_target).mean()
-                depth_loss += depth_ssim_loss * 0.5 + depth_l1_loss * 0.5
+                depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15
                 #depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15
                 losses["loss/depth_ssim{}".format(scale)] = depth_ssim_loss
 
