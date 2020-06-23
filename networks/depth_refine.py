@@ -9,7 +9,7 @@ import torchvision.models as models
 from collections import OrderedDict
 from .resnet_encoder import ResnetEncoder,resnet_multiimage_input
 import numpy as np
-from .deform_conv import DeformConv
+#from .deform_conv import DeformConv
 class Simple_Propagate(nn.Module):
     def __init__(self,crop_h,crop_w,mode='c'):
         super(Simple_Propagate, self).__init__()
@@ -112,7 +112,26 @@ class Simple_Propagate(nn.Module):
             scale = 1
         dep_ref = dep * scale
         return dep_ref,scale
-    
+
+    def eval_step(self, features, blur_depth, gt, rgb, stage, dep_last):
+        all_scale = gt / blur_depth
+        blur_depth_o, scale = self.scale_adjust(gt,blur_depth)
+        gt[all_scale>1.2] = 0
+        gt[all_scale<0.8]=0
+        if stage == 0:
+            dep_last = self.crop(gt,self.crop_h[0],self.crop_w[0])
+        
+        rgbd = torch.cat((rgb, blur_depth_o),1)
+        if stage == 0:
+            dep_last = self.crop(dep_last,self.crop_h[0],self.crop_w[0])
+        else:
+            dep_last = self.stage_pad(dep_last,self.crop_h[stage],self.crop_w[stage])
+        
+        mask = dep_last>0
+        stage_out, _ = self.stage_forward(features,rgbd,dep_last,stage)
+        error = (((dep_last[mask]-stage_out[mask])**2).mean()).sqrt()
+        return stage_out,error
+
     def forward(self,features, blur_depth, gt, rgb, stage):
 
         outputs = {}
@@ -120,7 +139,6 @@ class Simple_Propagate(nn.Module):
         #print(scale)
         all_scale = gt / blur_depth
         blur_depth_o, scale = self.scale_adjust(gt,blur_depth)
-        
         
         gt[all_scale>1.2] = 0
         gt[all_scale<0.8]=0
@@ -132,6 +150,7 @@ class Simple_Propagate(nn.Module):
         #     for ind,(h,w) in enumerate(zip(self.crop_h,self.crop_w)):
         #         outputs[("disp",ind)] = self.crop(blur_depth,h,w)
         # else:
+    
         self.stage_block(features,rgbd,dep_0, stage, outputs)
         
         outputs["blur_disp"] = blur_depth_o
@@ -201,23 +220,41 @@ class Depth_encoder2(nn.Module):
 class Iterative_Propagate(Simple_Propagate):
     def __init__(self,crop_h,crop_w,mode,dropout=False):
         super(Iterative_Propagate, self).__init__(crop_h, crop_w,mode)
-        self.model_ref0 = nn.Sequential(
-                            #ChannelGate(20),
-                            ConvBlock(20,32),
+        self.model_ref0 = nn.Sequential(ConvBlock(16+1,32),
+                            ConvBlock(32,32),
+                            ConvBlock(32,64),
+                            ConvBlock(64,32),
                             ConvBlock(32,16),
                             ConvBlock(16,8),
                             Conv3x3(8,1),nn.Sigmoid())
-
-        self.model_ref1 = nn.Sequential(
-                            #ChannelGate(20),
-                            ConvBlock(20,32),
+        self.model_ref1 = nn.Sequential(ConvBlock(16+1,32),
                             ConvBlock(32,32),
+                            ConvBlock(32,64),
+                            ConvBlock(64,32),
                             ConvBlock(32,16),
-                            #Deformable_Conv(16,16),
+                            ConvBlock(16,8),
+                            Conv3x3(8,1),nn.Sigmoid())
+        self.model_ref2 = nn.Sequential(ConvBlock(16+1,32),
+                            ConvBlock(32,32),
+                            ConvBlock(32,64),
+                            ConvBlock(64,32),
+                            ConvBlock(32,16),
+                            Conv3x3(16,1),nn.Sigmoid())
+        self.model_ref3 = nn.Sequential(ConvBlock(16+1,32),
+                            ConvBlock(32,32,2),
+                            ConvBlock(32,64,4),
+                            ConvBlock(32,32,2),
+                            ConvBlock(32,16),
+                            Conv3x3(16,1),nn.Sigmoid())
+        self.model_ref4 = nn.Sequential(ConvBlock(16+1,32),
+                            ConvBlock(32,32,2),
+                            ConvBlock(32,64,4),
+                            ConvBlock(32,32,2),
+                            ConvBlock(32,16),
                             Conv3x3(16,1),nn.Sigmoid())
 
-        self.models = nn.ModuleList([self.model_ref0,self.model_ref1])
-        self.dep_enc = Depth_encoder()
+        self.models = nn.ModuleList([self.model_ref0,self.model_ref1,self.model_ref2,self.model_ref3,self.model_ref4])
+        #self.dep_enc = Depth_encoder()
         self.propagate_time = 1
         self.dropout = dropout
     
@@ -226,7 +263,7 @@ class Iterative_Propagate(Simple_Propagate):
             model = self.models[0]
         else:
             model = self.models[1]
-        dep_enc = self.dep_enc
+        #dep_enc = self.dep_enc
         h = self.crop_h[stage]
         w = self.crop_w[stage]
         #dep_last is the padded depth
@@ -242,7 +279,7 @@ class Iterative_Propagate(Simple_Propagate):
         
         for i in range(self.propagate_time): 
             dep_fusion = dep_last * mask + dep * (1-mask)
-            dep_fusion = dep_enc(dep_fusion)
+            #dep_fusion = dep_enc(dep_fusion)
             feature_stage = torch.cat((feature_crop,dep_fusion),1)
             feature_stage = F.dropout2d(feature_stage,0.2,training=self.dropout)
             dep = model(feature_stage)

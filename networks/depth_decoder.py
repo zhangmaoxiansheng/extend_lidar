@@ -55,15 +55,15 @@ class DepthDecoder(nn.Module):
         x = input_features[-1]
         for i in range(4, -1, -1):
             x = self.convs[("upconv", i, 0)](x)
-            if i == 4 or i == 3:
-                F.dropout2d(x,0.25,training=dropout)
+            if i == 4:
+                x = F.dropout2d(x, 0.2,training=dropout)
             x = [upsample(x)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]
             x = torch.cat(x, 1)
             x = self.convs[("upconv", i, 1)](x)
-            if i == 4 or i == 3:
-                F.dropout2d(x,0.25,training=dropout)
+            # if i == 4:
+            #     x = F.dropout2d(x,0.2,training=dropout)
             if i in self.scales:
                 self.outputs[("disp", i)] = self.sigmoid(self.convs[("dispconv", i)](x))
             if i == 0 and self.refine:

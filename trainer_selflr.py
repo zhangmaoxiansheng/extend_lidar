@@ -115,6 +115,18 @@ class Trainer:
             for param in self.models["pose"].parameters():
                 param.requeires_grad = False
 
+        
+
+        if self.opt.load_weights_folder is not None:
+            self.load_model()
+        if self.refine:
+            self.models["depth_ref"] = copy.deepcopy(self.models["depth"])
+            self.models["depth_ref"].to(self.device)
+            #self.parameters_to_train_refine += list(self.models["depth_ref"].parameters())
+            for param in self.models["depth"].parameters():
+                param.requeires_grad = False
+            for param in self.models["depth_ref"].parameters():
+                param.requeires_grad = False
         if self.refine:
             parameters_to_train = self.parameters_to_train_refine
         else:
@@ -133,16 +145,7 @@ class Trainer:
                 self.pix2pix = networks.pix2pix_loss_iter(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
             else:
                 self.pix2pix = networks.pix2pix_loss_iter2(self.model_optimizer, self.D_optimizer, self.models["netD"], self.opt, self.crop_h, self.crop_w, mode=self.crop_mode,)
-
-        if self.opt.load_weights_folder is not None:
-            self.load_model()
-        if self.refine:
-            self.models["depth_ref"] = copy.deepcopy(self.models["depth"])
-            self.models["depth_ref"].to(self.device)
-            self.parameters_to_train_refine += list(self.models["depth_ref"].parameters())
-            for param in self.models["depth"].parameters():
-                param.requeires_grad = False
-
+        
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
@@ -291,26 +294,22 @@ class Trainer:
                     outputs.update(self.models["depth_ref"](features,self.dropout))
                     outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             else:
-                outputs.update(self.models["depth_ref"](features,self.dropout))
+                with torch.no_grad():
+                    outputs.update(self.models["depth_ref"](features,self.dropout))
                 outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
             _,outputs["dense_gt"] = disp_to_depth(outputs["dense_gt"],self.opt.min_depth,self.opt.max_depth)
-        if self.use_pose_net:
-            outputs.update(self.predict_poses(inputs, features))
+        
 
         for i in self.opt.frame_ids:
             origin_color = inputs[("color",i,0)].clone()
             for s in self.refine_stage:
                 inputs[("color",i,s)] = self.crop(origin_color,self.crop_h[s],self.crop_w[s])
-        
+        if not self.opt.surp_depth:
+            if self.use_pose_net:
+                outputs.update(self.predict_poses(inputs, features))
         self.generate_images_pred(inputs, outputs)
         losses = self.compute_losses(inputs, outputs)
-        if 'scale_list' in dir(self.models["mid_refine"]):
-            scale_list = self.models["mid_refine"].scale_list
-            if scale_list:
-                print(scale_list[0].shape)
-                scale_loss = 1 - torch.cat((scale_list),0).mean()
-                losses["loss"] += scale_loss * 0.2 
         if self.refine:
             losses["loss/scale"] = outputs["scale"]
 
@@ -402,25 +401,25 @@ class Trainer:
 
             _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
             outputs[("depth", 0, scale)] = depth
+            if not self.opt.surp_depth:
+                for i, frame_id in enumerate(self.opt.frame_ids[1:]):
+                    T = outputs[("cam_T_cam", 0, frame_id)]
 
-            for i, frame_id in enumerate(self.opt.frame_ids[1:]):
-                T = outputs[("cam_T_cam", 0, frame_id)]
+                    cam_points = self.backproject_depth[scale](
+                        depth, inputs[("inv_K", scale)])
+                    pix_coords = self.project_3d[scale](
+                        cam_points, inputs[("K", scale)], T)
 
-                cam_points = self.backproject_depth[scale](
-                    depth, inputs[("inv_K", scale)])
-                pix_coords = self.project_3d[scale](
-                    cam_points, inputs[("K", scale)], T)
+                    outputs[("sample", frame_id, scale)] = pix_coords
 
-                outputs[("sample", frame_id, scale)] = pix_coords
+                    outputs[("color", frame_id, scale)] = F.grid_sample(
+                        inputs[("color", frame_id, scale)],
+                        outputs[("sample", frame_id, scale)],
+                        padding_mode="border")
 
-                outputs[("color", frame_id, scale)] = F.grid_sample(
-                    inputs[("color", frame_id, scale)],
-                    outputs[("sample", frame_id, scale)],
-                    padding_mode="border")
-
-                if not self.opt.disable_automasking:
-                    outputs[("color_identity", frame_id, scale)] = \
-                        inputs[("color", frame_id, scale)]
+                    if not self.opt.disable_automasking:
+                        outputs[("color_identity", frame_id, scale)] = \
+                            inputs[("color", frame_id, scale)]
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -443,8 +442,8 @@ class Trainer:
         total_loss = 0
         stage_weight = [1,1,1.5,2]
         if len(self.refine_stage) > 4:
-            stage_weight = [1,1,1.2,1.2,2]
-            #stage_weight = [1,1,1.2,1.2,1.5]
+            #stage_weight = [1,1,1.2,1.2,2]
+            stage_weight = [1,1,1.2,1.2,1.5]
             #stage_weight = [0.25,0.5,0.8,1,1.5]
 
        
@@ -476,51 +475,54 @@ class Trainer:
             if self.refine:   
                 depth_l1_loss = torch.mean((disp - disp_target).abs())
                 depth_ssim_loss = self.ssim(disp, disp_target).mean()
-                depth_loss += depth_ssim_loss * 0.5 + depth_l1_loss * 0.5
+                if not self.opt.surp_depth:
+                    depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15
+                else:
+                    depth_loss += depth_l1_loss * 10
                 #depth_loss += depth_ssim_loss * 0.85 + depth_l1_loss * 0.15
                 losses["loss/depth_ssim{}".format(scale)] = depth_ssim_loss
-
-            for frame_id in self.opt.frame_ids[1:]:
-                pred = outputs[("color", frame_id, scale)]
-                reprojection_losses.append(self.compute_reprojection_loss(pred, target))
-
-            reprojection_losses = torch.cat(reprojection_losses, 1)
-
-            if not self.opt.disable_automasking:
-                identity_reprojection_losses = []
+            if not self.opt.surp_depth:
                 for frame_id in self.opt.frame_ids[1:]:
-                    pred = inputs[("color", frame_id, scale)]
-                    identity_reprojection_losses.append(
-                        self.compute_reprojection_loss(pred, target))
+                    pred = outputs[("color", frame_id, scale)]
+                    reprojection_losses.append(self.compute_reprojection_loss(pred, target))
 
-                identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
+                reprojection_losses = torch.cat(reprojection_losses, 1)
 
-                if self.opt.avg_reprojection:
-                    identity_reprojection_loss = identity_reprojection_losses.mean(1, keepdim=True)
+                if not self.opt.disable_automasking:
+                    identity_reprojection_losses = []
+                    for frame_id in self.opt.frame_ids[1:]:
+                        pred = inputs[("color", frame_id, scale)]
+                        identity_reprojection_losses.append(
+                            self.compute_reprojection_loss(pred, target))
+
+                    identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
+
+                    if self.opt.avg_reprojection:
+                        identity_reprojection_loss = identity_reprojection_losses.mean(1, keepdim=True)
+                    else:
+                        # save both images, and do min all at once below
+                        identity_reprojection_loss = identity_reprojection_losses
+                
+                reprojection_loss = reprojection_losses
+
+                if not self.opt.disable_automasking:
+                    # add random numbers to break ties
+                    identity_reprojection_loss += torch.randn(
+                        identity_reprojection_loss.shape).cuda() * 0.00001
+
+                    combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
                 else:
-                    # save both images, and do min all at once below
-                    identity_reprojection_loss = identity_reprojection_losses
-            
-            reprojection_loss = reprojection_losses
+                    combined = reprojection_loss
 
-            if not self.opt.disable_automasking:
-                # add random numbers to break ties
-                identity_reprojection_loss += torch.randn(
-                    identity_reprojection_loss.shape).cuda() * 0.00001
+                if combined.shape[1] == 1:
+                    to_optimise = combined
+                else:
+                    to_optimise, idxs = torch.min(combined, dim=1)
 
-                combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
-            else:
-                combined = reprojection_loss
-
-            if combined.shape[1] == 1:
-                to_optimise = combined
-            else:
-                to_optimise, idxs = torch.min(combined, dim=1)
-
-            if not self.opt.disable_automasking:
-                outputs["identity_selection/{}".format(scale)] = (
-                    idxs > identity_reprojection_loss.shape[1] - 1).float()
-            loss += to_optimise.mean()
+                if not self.opt.disable_automasking:
+                    outputs["identity_selection/{}".format(scale)] = (
+                        idxs > identity_reprojection_loss.shape[1] - 1).float()
+                loss += to_optimise.mean()
             #losses["optloss/{}".format(scale)] = to_optimise.mean()
             mean_disp = disp.mean(2, True).mean(3, True)
             norm_disp = disp / (mean_disp + 1e-7)
@@ -633,30 +635,30 @@ class Trainer:
                 # scio.savemat(save_name1, {'depth_part_gt':depth_part_gt})
                 # scio.savemat(save_name2, {'disp_part_gt':disp_part_gt})
 
-                for frame_id in self.opt.frame_ids:
-                    if s != 'r':
-                        writer.add_image(
-                            "color_{}_{}/{}".format(frame_id, s, j),
-                            inputs[("color", frame_id, s)][j].data, self.step)
-                    if s == 0 and frame_id != 0:
-                        writer.add_image(
-                            "color_pred_{}_{}/{}".format(frame_id, s, j),
-                            outputs[("color", frame_id, s)][j].data, self.step)
+                # for frame_id in self.opt.frame_ids:
+                #     if s != 'r':
+                #         writer.add_image(
+                #             "color_{}_{}/{}".format(frame_id, s, j),
+                #             inputs[("color", frame_id, s)][j].data, self.step)
+                #     if s == 0 and frame_id != 0:
+                #         writer.add_image(
+                #             "color_pred_{}_{}/{}".format(frame_id, s, j),
+                #             outputs[("color", frame_id, s)][j].data, self.step)
 
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                if self.opt.predictive_mask:
-                    for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
-                        writer.add_image(
-                            "predictive_mask_{}_{}/{}".format(frame_id, s, j),
-                            outputs["predictive_mask"][("disp", s)][j, f_idx][None, ...],
-                            self.step)
+                # if self.opt.predictive_mask:
+                #     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
+                #         writer.add_image(
+                #             "predictive_mask_{}_{}/{}".format(frame_id, s, j),
+                #             outputs["predictive_mask"][("disp", s)][j, f_idx][None, ...],
+                #             self.step)
 
-                elif not self.opt.disable_automasking:
-                    writer.add_image(
-                        "automask_{}/{}".format(s, j),
-                        outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
+                # elif not self.opt.disable_automasking:
+                #     writer.add_image(
+                #         "automask_{}/{}".format(s, j),
+                #         outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
 
     def save_opts(self):
         """Save options to disk so we know what we ran this experiment with

@@ -90,7 +90,7 @@ def evaluate(opt):
         filenames = readlines(os.path.join(splits_dir, "eigen_benchmark", "test_files.txt"))
         encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
-        refine = opt.refine
+        refine = opt.refine or opt.dropout
 
         if refine:
             opt.refine_stage = list(range(opt.refine_stage))
@@ -121,17 +121,35 @@ def evaluate(opt):
         encoder.eval()
         depth_decoder.cuda()
         depth_decoder.eval()
-        if refine:
+        if refine and not opt.dropout:
             renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
             if opt.refine_model == 'i':
                 mid_refine = networks.Iterative_Propagate(crop_h,crop_w,opt.crop_mode)
-            elif opt.refine_model == 'id':
-                mid_refine = networks.Iterative_Propagate_deform(crop_h,crop_w,opt.crop_mode)
+            elif opt.refine_model == 'io':
+                mid_refine = networks.Iterative_Propagate_old(crop_h,crop_w,opt.crop_mode)
             else:
                 mid_refine = networks.Simple_Propagate(crop_h,crop_w,opt.crop_mode)
             mid_refine.load_state_dict(torch.load(renet_path))
             mid_refine.cuda()
             mid_refine.eval()
+        if opt.dropout:
+            depth_ref_path = os.path.join(opt.load_weights_folder, "depth_ref.pth")
+            renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
+            
+            if opt.refine_model == 'i':
+                mid_refine = networks.Iterative_Propagate(crop_h,crop_w,opt.crop_mode)
+            elif opt.refine_model == 'io':
+                mid_refine = networks.Iterative_Propagate_old(crop_h,crop_w,opt.crop_mode)
+            else:
+                mid_refine = networks.Simple_Propagate(crop_h,crop_w,opt.crop_mode)
+            depth_ref = networks.DepthDecoder(encoder.num_ch_enc,refine=refine)
+            
+            mid_refine.load_state_dict(torch.load(renet_path))
+            mid_refine.cuda()
+            mid_refine.eval()
+            depth_ref.load_state_dict(torch.load(depth_ref_path))
+            depth_ref.cuda()
+            depth_ref.eval()
 
         pred_disps = []
         gt = []
@@ -154,11 +172,12 @@ def evaluate(opt):
 
                 depth_part_gt =  F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
                 input_rgbd = torch.cat((input_color,depth_part_gt),1)
-                output = depth_decoder(encoder(input_rgbd))
+                features_init = encoder(input_rgbd)
+                output = depth_decoder(features_init)
                 #output = depth_decoder(encoder(input_color))
                 output_disp = output[("disp", 0)]
 
-                if refine:
+                if refine and not opt.dropout:
                     disp_blur = output[("disp", 0)]
                     features = output["disp_feature"]
                     depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
@@ -166,6 +185,57 @@ def evaluate(opt):
                     output = mid_refine(features,disp_blur, disp_part_gt,input_color,opt.refine_stage)
                     final_stage = opt.refine_stage[-1]
                     output_disp = output[("disp", final_stage)]
+                if opt.dropout and not opt.eval_step:
+                    #baseway
+                    disp_blur = output[("disp", 0)]
+                    outputs2 = depth_ref(features_init)
+                    depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
+                    disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
+                    output = mid_refine(outputs2["disp_feature"],disp_blur, disp_part_gt,input_color,opt.refine_stage)
+                    final_stage = opt.refine_stage[-1]
+                    output_disp = output[("disp", final_stage)]
+                if opt.eval_step and opt.dropout:
+                    # outputs2 = {}
+                    # output_f = {}
+                    # disp_blur = output[("disp", 0)]
+                    # depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
+                    # disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
+                    iter_time=10
+                    # mask = disp_part_gt > 0
+                    # out = []
+                    # for it in range(iter_time):
+                    #     output_f.update(depth_ref(features_init,dropout=True))
+                    #     output = mid_refine(output_f["disp_feature"],disp_blur, disp_part_gt,input_color,opt.refine_stage)
+                    #     output4 = output["disp",4]
+                    #     out.append(output4)
+                    #     error = (((output4[mask] - disp_part_gt[mask])**2).mean()).sqrt()
+                        # if it == 0:
+                        #     best_error = error
+                        #     outputs2[("disp", 4)] = output["disp",4]
+                        # elif error<best_error:
+                        #     best_error = error
+                        #     outputs2[("disp", 4)] = output["disp",4]
+
+                    #outputs2[("disp", 4)] = torch.mean(torch.cat(out,1),dim=1,keepdim=True)
+
+                    for i in opt.refine_stage:
+                        if i == 0:
+                            dep_last = disp_part_gt
+                        else:
+                            dep_last = outputs2[("disp",i-1)]
+                        for it in range(iter_time):
+                            
+                            output_f = depth_ref(features_init,True)
+                            stage_output,error = mid_refine.eval_step(output_f["disp_feature"],disp_blur,disp_part_gt,input_color,i,dep_last)
+                            if it == 0:
+                                outputs2[("disp", i)] = stage_output
+                                best_error = error
+                            elif error <  best_error:
+                                outputs2[("disp", i)] = stage_output
+                                best_error = error
+                    
+                    final_stage = opt.refine_stage[-1]
+                    output_disp = outputs2[("disp", final_stage)]
                     
                 pred_disp, _ = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
                 

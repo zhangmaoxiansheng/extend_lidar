@@ -122,6 +122,12 @@ class MonodepthOptions:
         self.parser.add_argument("--dropout",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
+        self.parser.add_argument("--surp_depth",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
+        self.parser.add_argument("--eval_step",
+                                 help="if set, uses stereo pair for training",
+                                 action="store_true")
         
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
