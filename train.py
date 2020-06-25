@@ -14,7 +14,7 @@ opts = options.parse()
 if opts.refine and not opts.dropout:
     from trainer_cspnall import Trainer
 elif opts.dropout:
-    from trainer_selflr import Trainer
+    from trainer_selftest import Trainer
 else:
     from trainer_dep import Trainer
 

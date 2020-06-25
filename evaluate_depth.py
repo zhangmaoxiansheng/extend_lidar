@@ -92,7 +92,7 @@ def evaluate(opt):
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
         refine = opt.refine
 
-        if refine:
+        if refine or opt.dropout:
             opt.refine_stage = list(range(opt.refine_stage))
             crop_h = [96,128,160,192]
             crop_w = [192,256,384,640]
@@ -114,7 +114,7 @@ def evaluate(opt):
                                 pin_memory=True, drop_last=False)
 
         encoder = networks.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc,refine=refine)            
+        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc,refine=refine or opt.dropout)            
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
@@ -124,7 +124,7 @@ def evaluate(opt):
         encoder.eval()
         depth_decoder.cuda()
         depth_decoder.eval()
-        if opt.refine_dep:
+        if opt.refine_dep or opt.dropout:
             encoder_nogard = networks.ResnetEncoder(opt.num_layers, False)
             depth_decoder_nograd = networks.DepthDecoder(encoder.num_ch_enc,refine=refine)
             encoder_path = os.path.join(opt.load_weights_folder, "encoder_nograd.pth")
@@ -137,12 +137,15 @@ def evaluate(opt):
             encoder_nogard.eval()
             depth_decoder_nograd.cuda()
             depth_decoder_nograd.eval()
-        if refine:
+            encoder_path = os.path.join(opt.load_weights_folder, "encoder_nograd.pth")
+            decoder_path = os.path.join(opt.load_weights_folder, "depth_nograd.pth")
+            
+        if refine or opt.dropout:
             renet_path = os.path.join(opt.load_weights_folder, "mid_refine.pth")
             if opt.refine_model == 'i':
                 mid_refine = networks.Iterative_Propagate(crop_h,crop_w,opt.crop_mode)
-            elif opt.refine_model == 'id':
-                mid_refine = networks.Iterative_Propagate_deform(crop_h,crop_w,opt.crop_mode)
+            elif opt.refine_model == 'io':
+                mid_refine = networks.Iterative_Propagate_old(crop_h,crop_w,opt.crop_mode)
             else:
                 mid_refine = networks.Simple_Propagate(crop_h,crop_w,opt.crop_mode)
             mid_refine.load_state_dict(torch.load(renet_path))
@@ -178,19 +181,40 @@ def evaluate(opt):
                     input_rgbd2 = torch.cat((input_color,depth_full),1)
                     output = depth_decoder(encoder(input_rgbd2))
                     output_disp = output[("disp", 0)]
+                elif opt.dropout:
+                    output = depth_decoder_nograd(encoder_nogard(input_rgbd))
+                    output_disp = output[("disp",0)]
+                    depth_full = F.interpolate(output_disp, [opt.height, opt.width], mode="bilinear")
+                    input_rgbd2 = torch.cat((input_color,depth_full),1)
+                    output = depth_decoder(encoder(input_rgbd2),False)
+                    disp_blur = output[("disp", 0)]
+                    features = output["disp_feature"]
+                    depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
+                    disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
+                    output = mid_refine(features,disp_blur, disp_part_gt,input_color,opt.refine_stage)
+                    final_stage = opt.refine_stage[-1]
+                    output_disp = output[("disp", final_stage)]
                 else:
                     output = depth_decoder(encoder(input_rgbd))
-                    #output = depth_decoder(encoder(input_color))
+                #output = depth_decoder(encoder(input_color))
                     output_disp = output[("disp", 0)]
 
-                    if refine:
-                        disp_blur = output[("disp", 0)]
-                        features = output["disp_feature"]
-                        depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
-                        disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
-                        output = mid_refine(features,disp_blur, disp_part_gt,input_color,opt.refine_stage)
-                        final_stage = opt.refine_stage[-1]
-                        output_disp = output[("disp", final_stage)]
+                if refine:
+                    disp_blur = output[("disp", 0)]
+                    features = output["disp_feature"]
+                    depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
+                    disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
+                    output = mid_refine(features,disp_blur, disp_part_gt,input_color,opt.refine_stage)
+                    final_stage = opt.refine_stage[-1]
+                    output_disp = output[("disp", final_stage)]
+
+                if opt.refine_dep:
+                    #_, depth_blur = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
+                    depth_blur = output_disp
+                    input_rgbd2 = torch.cat((input_color,depth_blur),1)
+                    output = depth_decoder_ref(encoder_ref(input_rgbd2))
+                    output_disp = output[("disp", 0)]
+
                     
                 pred_disp, _ = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
                 

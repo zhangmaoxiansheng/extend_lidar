@@ -261,8 +261,8 @@ class Trainer:
                 features_nograd = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],depth_part_gt),1))
                 outputs_nograd = self.models["depth"](features_nograd)
                 disp_blur = outputs_nograd[("disp", 0)]
-                _, depth_blur = disp_to_depth(disp_blur,self.opt.min_depth,self.opt.max_depth)
-            features = self.models["encoder_ref"](torch.cat((inputs["color_aug", 0, 0],depth_blur),1))
+                #_, depth_blur = disp_to_depth(disp_blur,self.opt.min_depth,self.opt.max_depth)
+            features = self.models["encoder_ref"](torch.cat((inputs["color_aug", 0, 0],disp_blur),1))
             outputs = self.models["depth_ref"](features)
             outputs["dense_gt"] = F.interpolate(disp_blur, [self.opt.height, self.opt.width], mode="bilinear")
 

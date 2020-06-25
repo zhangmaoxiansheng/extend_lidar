@@ -56,7 +56,7 @@ class DepthDecoder(nn.Module):
         for i in range(4, -1, -1):
             x = self.convs[("upconv", i, 0)](x)
             if i == 4:
-                F.dropout2d(x,0.2,training=dropout)
+                x = F.dropout2d(x,0.2,training=dropout)
             x = [upsample(x)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]

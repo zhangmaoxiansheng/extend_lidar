@@ -92,14 +92,14 @@ class Trainer:
             self.opt.num_layers, self.opt.weights_init == "pretrained", num_input_images=1)
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
-        self.parameters_to_train_refine += list(self.models["encoder"].parameters())
+        #self.parameters_to_train_refine += list(self.models["encoder"].parameters())
         
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales,refine=self.refine)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
-        self.parameters_to_train_refine += list(self.models["depth"].parameters())
+        #self.parameters_to_train_refine += list(self.models["depth"].parameters())
 
         self.models["pose_encoder"] = networks.ResnetEncoder(self.opt.num_layers,self.opt.weights_init == "pretrained",num_input_images=self.num_pose_frames)
         self.models["pose_encoder"].to(self.device)
@@ -122,11 +122,15 @@ class Trainer:
             self.models["depth_nograd"].to(self.device)
             for param in self.models["depth_nograd"].parameters():
                 param.requeires_grad = False
+            for param in self.models["depth"].parameters():
+                param.requeires_grad = False
             
             self.models["encoder_nograd"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained", num_input_images=1)
             self.models["encoder_nograd"].to(self.device)
             for param in self.models["encoder_nograd"].parameters():
+                param.requeires_grad = False
+            for param in self.models["encoder"].parameters():
                 param.requeires_grad = False
         if self.refine:
             parameters_to_train = self.parameters_to_train_refine
@@ -294,11 +298,16 @@ class Trainer:
             if (self.gan or self.gan2) and self.epoch % 2 != 0 and self.epoch > self.pix2pix.start_gan and self.epoch < self.pix2pix.stop_gan:
                 with torch.no_grad():
                     features = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],disp_blur),1))
-                    outputs.update(self.models["depth"](features,self.dropout))
+                    outputs.update(self.models["depth"](features,False))
+                    disp_blur = outputs[("disp",0)]
+                    outputs.update(self.models["depth"](features,False))
                     outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             else:
-                features = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],disp_blur),1))
-                outputs.update(self.models["depth"](features,self.dropout))
+                with torch.no_grad():
+                    features = self.models["encoder"](torch.cat((inputs["color_aug", 0, 0],disp_blur),1))
+                    outputs.update(self.models["depth"](features,False))
+                    disp_blur = outputs[("disp",0)]
+                    outputs.update(self.models["depth"](features,False))
                 outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
             _,outputs["dense_gt"] = disp_to_depth(outputs["dense_gt"],self.opt.min_depth,self.opt.max_depth)
