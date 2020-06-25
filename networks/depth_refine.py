@@ -118,24 +118,27 @@ class Simple_Propagate(nn.Module):
         blur_depth_o, scale = self.scale_adjust(gt,blur_depth)
         gt[all_scale>1.2] = 0
         gt[all_scale<0.8]=0
+        gt_crop = self.crop(gt,self.crop_h[stage],self.crop_w[stage])
         if stage == 0:
-            dep_last = self.crop(gt,self.crop_h[0],self.crop_w[0])
+            dep_last = gt_crop
         
         rgbd = torch.cat((rgb, blur_depth_o),1)
-        if stage == 0:
-            dep_last = self.crop(dep_last,self.crop_h[0],self.crop_w[0])
-        else:
+        # if stage == 0:
+        #     dep_last = self.crop(dep_last,self.crop_h[0],self.crop_w[0])
+        if stage != 0:
             dep_last = self.stage_pad(dep_last,self.crop_h[stage],self.crop_w[stage])
         
         mask = dep_last>0
+        mask2 = gt_crop>0
         stage_out, _ = self.stage_forward(features,rgbd,dep_last,stage)
-        error = (((dep_last[mask]-stage_out[mask])**2).mean()).sqrt()
+        #error = (((dep_last[mask]-stage_out[mask])**2).mean()).sqrt() + (((gt_crop[mask2]-stage_out[mask2])**2).mean()).sqrt()
+        error = (dep_last[mask]-stage_out[mask]).abs().mean()+ (gt_crop[mask2]-stage_out[mask2]).abs().mean()
         return stage_out,error
 
     def forward(self,features, blur_depth, gt, rgb, stage):
 
         outputs = {}
-
+        #outputs["blur_disp"] = blur_depth
         #print(scale)
         all_scale = gt / blur_depth
         blur_depth_o, scale = self.scale_adjust(gt,blur_depth)
@@ -158,6 +161,7 @@ class Simple_Propagate(nn.Module):
         
         outputs["dense_gt"] = self.crop(blur_depth,64,128)
         outputs['scale'] = scale
+        #outputs['scale'] = 1
         return outputs
 class BasicBlock(nn.Module):
 
