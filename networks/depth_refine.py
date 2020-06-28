@@ -126,13 +126,26 @@ class Simple_Propagate(nn.Module):
         # if stage == 0:
         #     dep_last = self.crop(dep_last,self.crop_h[0],self.crop_w[0])
         if stage != 0:
-            dep_last = self.stage_pad(dep_last,self.crop_h[stage],self.crop_w[stage])
+            dep_last_ = self.stage_pad(dep_last,self.crop_h[stage],self.crop_w[stage])
+        else:
+            dep_last_ = dep_last
         
         mask = dep_last>0
         mask2 = gt_crop>0
-        stage_out, _ = self.stage_forward(features,rgbd,dep_last,stage)
+        stage_out, _ = self.stage_forward(features,rgbd,dep_last_,stage)
+        #to depth
+        _,dep_last_depth = disp_to_depth(dep_last,0.9,100)
+        _,stage_out_depth = disp_to_depth(stage_out,0.9,100)
+        _,gt_crop_depth = disp_to_depth(gt_crop,0.9,100)
+        if stage == 0:
+            error = (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
+        else:
+            stage_out_depth_crop = self.crop(stage_out_depth,self.crop_h[stage-1],self.crop_w[stage-1])
+            mask = stage_out_depth_crop>0
+            error = (dep_last_depth[mask]-stage_out_depth_crop[mask]).abs().mean()+ (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
         #error = (((dep_last[mask]-stage_out[mask])**2).mean()).sqrt() + (((gt_crop[mask2]-stage_out[mask2])**2).mean()).sqrt()
-        error = (dep_last[mask]-stage_out[mask]).abs().mean()+ (gt_crop[mask2]-stage_out[mask2]).abs().mean()
+        #error = (dep_last[mask]-stage_out[mask]).abs().mean()+ (gt_crop[mask2]-stage_out[mask2]).abs().mean()
+        #error = (dep_last_depth[mask]-stage_out_depth[mask]).abs().mean()+ (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
         return stage_out,error
 
     def forward(self,features, blur_depth, gt, rgb, stage):

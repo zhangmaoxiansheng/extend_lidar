@@ -229,7 +229,7 @@ class Trainer:
         self.start_time = time.time()
         for self.epoch in range(self.epoch, self.epoch + self.opt.num_epochs):
             self.run_epoch()
-            if (self.epoch + 1) % self.opt.save_frequency == 0:
+            if self.epoch>10 and (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
 
     def run_epoch(self):
@@ -294,8 +294,8 @@ class Trainer:
                     outputs.update(self.models["depth_ref"](features,self.dropout))
                     outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             else:
-                with torch.no_grad():
-                    outputs.update(self.models["depth_ref"](features,self.dropout))
+                #with torch.no_grad():
+                outputs.update(self.models["depth_ref"](features,self.dropout))
                 outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
             _,outputs["dense_gt"] = disp_to_depth(outputs["dense_gt"],self.opt.min_depth,self.opt.max_depth)

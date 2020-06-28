@@ -251,7 +251,6 @@ def evaluate(opt):
                     output_part_gt.append(depth_part_gt.cpu()[:, 0].numpy())
                     
                 pred_disp, _ = disp_to_depth(output_disp, opt.min_depth, opt.max_depth)
-                
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
 
                 if opt.post_process:
@@ -282,7 +281,7 @@ def evaluate(opt):
         #     opt.load_weights_folder, "disps_{}_split.npy".format(opt.eval_split))
         # print("-> Saving predicted disparities to ", output_path)
         # np.save(output_path, pred_disps)
-        save_base_path = './result'
+        save_base_path = './result2'
         if not os.path.exists(save_base_path):
             os.mkdir(save_base_path)
 
@@ -290,11 +289,14 @@ def evaluate(opt):
         np.save(os.path.join(save_base_path,'gt.npy'),gt)
         #save part gt
         np.save(os.path.join(save_base_path,'part_gt.npy'),output_part_gt)
+        #save output
+        np.save(os.path.join(save_base_path,'output_disp.npy'),pred_disps)
         for i in opt.refine_stage:
             save_list = output_save[i]
-            for ind in range(0,len(save_list),iter_time):
-                save_image_set = np.concatenate(save_list[i:i+iter_time],axis=0)
-                np.save(os.path.join(save_base_path,'%d_stage%d.npy'%(ind,i)),save_image_set)
+            
+            for count,ind in enumerate(range(0,len(save_list),iter_time)):
+                save_image_set = np.concatenate(save_list[ind:ind+iter_time],axis=0)
+                np.save(os.path.join(save_base_path,'%d_stage%d.npy'%(count,i)),save_image_set)
 
 
 
@@ -325,7 +327,7 @@ def evaluate(opt):
         pred_disp = pred_disps[i]
         pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
         pred_depth = 1 / pred_disp
-
+        
         if opt.eval_split == "eigen":
             mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
 
