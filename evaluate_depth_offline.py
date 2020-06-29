@@ -72,13 +72,22 @@ def l1_loss(img1,gt):
     mask = gt>0
     return np.mean(np.abs(img1[mask] - gt[mask]))
 
+def abs_rel(img1,gt):
+    mask = gt>0
+    return np.mean(np.abs(img1[mask] - gt[mask])/gt[mask])
+
+
+def l2_loss(img1,gt):
+    mask = gt>0
+    return np.sqrt(np.mean((img1[mask] - gt[mask])**2))
+
 def evaluate(opt):
     """Evaluates a pretrained model using a specified test set
     """
     opt.refine_stage = 5
     MIN_DEPTH = 1e-3
     MAX_DEPTH = 80
-    res_base_path = './result2'
+    res_base_path = './result_test'
     
     crop_h = [96,128,160,192,192]
     crop_w = [192,256,384,448,640]
@@ -102,7 +111,11 @@ def evaluate(opt):
     #     disp_mean = np.expand_dims(np.mean(imageset,0),0)
     #     scale_disp_mean,_ = disp_to_depth(disp_mean,opt.min_depth,opt.max_depth)
     #     pred_disps.append(scale_disp_mean)
-    #l1 + gt
+    #l1/l2 + gt
+    loss = l1_loss
+    loss2 = abs_rel
+    error_offline = []
+    iter_time = 1
     for i in range(len(filenames)):
         stage_best_depth = []
         print(i)
@@ -112,16 +125,17 @@ def evaluate(opt):
             part_gt_now = part_gt[i]
             part_gt_now_stage = np.expand_dims(crop_center(part_gt_now,crop_h[s],crop_w[s]),0)#depth
             #part_gt_now_stage = depth_to_disp(part_gt_now_stage,opt.min_depth,opt.max_depth)
-            images = np.split(imageset,50,0)
-            for j in range(50):#iter times
+            images = np.split(imageset,iter_time,0)
+            for j in range(iter_time):#iter times
                 _,img_current = disp_to_depth(images[j],opt.min_depth,opt.max_depth)#depth
                 #img_current = images[j]
                 if s == 0:
-                    error = l1_loss(img_current,part_gt_now_stage)
+                    error = loss(img_current,part_gt_now_stage)
                 else:
                     dep_last = stage_best_depth[s-1]
                     img_current_last = np.expand_dims(crop_center(np.squeeze(img_current),crop_h[s-1],crop_w[s-1]),0)            
-                    error = l1_loss(img_current,part_gt_now_stage)+l1_loss(img_current_last,dep_last)
+                    error = loss(img_current,part_gt_now_stage) + loss(img_current_last,dep_last)# + abs_rel(img_current_last,dep_last)
+                error_offline.append(error)
                 if j == 0:
                     best_error = error
                     best_img = img_current
@@ -164,7 +178,10 @@ def evaluate(opt):
 
     mean_errors = np.array(errors).mean(0)
 
-    np.save(os.path.join(res_base_path,'offline_depres.npy'),pred_disps)
+    if opt.save_pred_disps:
+        np.save(os.path.join(res_base_path,'offline_depres.npy'),pred_disps)
+        np.save(os.path.join(res_base_path,'error_offline.npy'),error_offline)
+    
     line1 = "\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3")
     print(line1)
     with open(os.path.join(res_base_path,'res.txt'),'a') as f:

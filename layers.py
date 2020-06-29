@@ -25,6 +25,9 @@ def disp_to_depth(disp, min_depth, max_depth):
     return scaled_disp, depth
 
 def depth_to_disp(dep, min_depth, max_depth):
+    '''depht=0 -> disp->infinite
+    here depth=0 -> disp=0
+    '''
     depth = dep.clone()
     mask = depth.sign()
     depth[depth == 0] = 1

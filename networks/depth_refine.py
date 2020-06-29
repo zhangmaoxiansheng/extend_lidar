@@ -42,7 +42,6 @@ class Simple_Propagate(nn.Module):
         self.crop_mode = mode
     
     def crop(self,image,h=160,w=320):
-        #mask = torch.zeros_like(image)
         origin_h = image.size(2)
         origin_w = image.size(3)
         if self.crop_mode=='c' or self.crop_mode=='s' or self.crop_mode=='r':
@@ -57,8 +56,7 @@ class Simple_Propagate(nn.Module):
             h_start = max(int(round(origin_h-h)),0)
             w_start = max(int(round((origin_w-w)/2)),0)
             w_end = min(w_start + w,origin_w)
-            output = image[:,:,h_start:,w_start:w_end] 
-        #mask[:,:,h_start:h_end,w_start:w_end] = 1
+            output = image[:,:,h_start:,w_start:w_end]
         return output
     #small feature 256 -> fuse small gt -> conv -> larger area -> next stage 
     def stage_forward(self,features,rgbd,dep_last,stage):
@@ -68,7 +66,6 @@ class Simple_Propagate(nn.Module):
         w = self.crop_w[stage]
         rgbd = self.crop(rgbd,h,w)
         feature_crop = self.crop(features,h,w)
-        #feature_crop = rgbd[:,1:,:,:]
         dep = rgbd[:,3,:,:].unsqueeze(1)
         mask = dep_last.sign()
         dep_fusion = dep_last * mask + dep * (1-mask) 
@@ -113,43 +110,41 @@ class Simple_Propagate(nn.Module):
         dep_ref = dep * scale
         return dep_ref,scale
 
-    def eval_step(self, features, blur_depth, gt, rgb, stage, dep_last):
+    def eval_step(self, features, blur_depth, gt_part, rgb, stage, dep_last,depth_gt):
+        gt = gt_part.clone()
         all_scale = gt / blur_depth
         blur_depth_o, scale = self.scale_adjust(gt,blur_depth)
+        gt_crop = self.crop(gt,self.crop_h[stage],self.crop_w[stage])
         gt[all_scale>1.2] = 0
         gt[all_scale<0.8]=0
-        gt_crop = self.crop(gt,self.crop_h[stage],self.crop_w[stage])
+        #gt_crop = self.crop(gt,self.crop_h[stage],self.crop_w[stage])
         if stage == 0:
-            dep_last = gt_crop
+            dep_last = self.crop(gt,self.crop_h[stage],self.crop_w[stage])
         
         rgbd = torch.cat((rgb, blur_depth_o),1)
-        # if stage == 0:
-        #     dep_last = self.crop(dep_last,self.crop_h[0],self.crop_w[0])
+        
         if stage != 0:
             dep_last_ = self.stage_pad(dep_last,self.crop_h[stage],self.crop_w[stage])
         else:
             dep_last_ = dep_last
         
-        mask = dep_last>0
-        mask2 = gt_crop>0
         stage_out, _ = self.stage_forward(features,rgbd,dep_last_,stage)
         #to depth
         _,dep_last_depth = disp_to_depth(dep_last,0.9,100)
         _,stage_out_depth = disp_to_depth(stage_out,0.9,100)
-        _,gt_crop_depth = disp_to_depth(gt_crop,0.9,100)
+        #_,gt_crop_depth = disp_to_depth(gt_crop,0.9,100)
+        gt_crop_depth = self.crop(depth_gt,self.crop_h[stage],self.crop_w[stage])
+        mask2 = gt_crop_depth > 0
+        mask = dep_last_depth > 0
         if stage == 0:
-            error = (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
+            error = (stage_out_depth[mask2]-gt_crop_depth[mask2]).abs().mean()
         else:
             stage_out_depth_crop = self.crop(stage_out_depth,self.crop_h[stage-1],self.crop_w[stage-1])
             mask = stage_out_depth_crop>0
             error = (dep_last_depth[mask]-stage_out_depth_crop[mask]).abs().mean()+ (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
-        #error = (((dep_last[mask]-stage_out[mask])**2).mean()).sqrt() + (((gt_crop[mask2]-stage_out[mask2])**2).mean()).sqrt()
-        #error = (dep_last[mask]-stage_out[mask]).abs().mean()+ (gt_crop[mask2]-stage_out[mask2]).abs().mean()
-        #error = (dep_last_depth[mask]-stage_out_depth[mask]).abs().mean()+ (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
         return stage_out,error
 
     def forward(self,features, blur_depth, gt, rgb, stage):
-
         outputs = {}
         #outputs["blur_disp"] = blur_depth
         #print(scale)
@@ -162,12 +157,11 @@ class Simple_Propagate(nn.Module):
         blur_depth = gt_mask * gt + (1-gt_mask) * blur_depth_o
         rgbd = torch.cat((rgb, blur_depth_o),1)
         dep_0 = self.crop(gt,self.crop_h[0],self.crop_w[0])
+        
+        self.stage_block(features,rgbd,dep_0, stage, outputs)
         # if self.crop_mode == 'b':
         #     for ind,(h,w) in enumerate(zip(self.crop_h,self.crop_w)):
         #         outputs[("disp",ind)] = self.crop(blur_depth,h,w)
-        # else:
-    
-        self.stage_block(features,rgbd,dep_0, stage, outputs)
         
         outputs["blur_disp"] = blur_depth_o
         outputs["disp_all_in"] = blur_depth
@@ -293,12 +287,10 @@ class Iterative_Propagate(Simple_Propagate):
             scale = 1
         dep = dep * scale
         mask = dep_last.sign()
-        
         for i in range(self.propagate_time): 
             dep_fusion = dep_last * mask + dep * (1-mask)
-            #dep_fusion = dep_enc(dep_fusion)
             feature_stage = torch.cat((feature_crop,dep_fusion),1)
-            feature_stage = F.dropout2d(feature_stage,0.2,training=self.dropout)
+            #feature_stage = F.dropout2d(feature_stage,0.2,training=self.dropout)
             dep = model(feature_stage)
             if torch.median(dep[dep_last>0]) > 0:
                 scale = torch.median(dep_last[dep_last>0]) / torch.median(dep[dep_last>0])

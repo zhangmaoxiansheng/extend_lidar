@@ -97,8 +97,12 @@ def evaluate(opt):
             crop_h = [96,128,160,192]
             crop_w = [192,256,384,640]
             if len(opt.refine_stage) > 4:
-                crop_h = [96,128,160,192,192]
-                crop_w = [192,256,384,448,640]
+                if opt.crop_mode == 'b':
+                    crop_h = [128,168,192,192,192]
+                    crop_w = [192,256,384,448,640]
+                else:
+                    crop_h = [96,128,160,192,192]
+                    crop_w = [192,256,384,448,640]
         else:
             crop_h = None
             crop_w = None
@@ -162,6 +166,7 @@ def evaluate(opt):
             for i in opt.refine_stage:
                 output_save[i] = []
             output_part_gt = []
+            error_saved = []
         with torch.no_grad():
             for data in dataloader:
                 batch_index += 1
@@ -169,12 +174,6 @@ def evaluate(opt):
                 input_color = data[("color", 0, 0)].cuda()
                 for key, ipt in data.items():
                     data[key] = ipt.cuda()
-
-
-                if opt.post_process:
-                    # Post-processed results require each image to have two forward passes
-                    input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
-
                 depth_part_gt =  F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
                 input_rgbd = torch.cat((input_color,depth_part_gt),1)
                 features_init = encoder(input_rgbd)
@@ -210,24 +209,6 @@ def evaluate(opt):
                     iter_time=50
                     mask = disp_part_gt > 0
                     out = []
-                    # for it in range(iter_time):
-                    #     output_f.update(depth_ref(features_init,dropout=True))
-                    #     output = mid_refine(output_f["disp_feature"],disp_blur, disp_part_gt,input_color,opt.refine_stage)
-                    #     output4 = output["disp",4]
-                    #     for i in opt.refine_stage:
-                    #         save_disp = output["disp",i]
-                    #         save_disp = save_disp.cpu()[:, 0].numpy()
-                    #         output_save[i].append(save_disp)
-                    #     out.append(output4)
-                    #     error = (((output4[mask] - disp_part_gt[mask])**2).mean()).sqrt()
-                    #     if it == 0:
-                    #         best_error = error
-                    #         outputs2[("disp", 4)] = output["disp",4]
-                    #     elif error<best_error:
-                    #         best_error = error
-                    #         outputs2[("disp", 4)] = output["disp",4]
-
-                    #outputs2[("disp", 4)] = torch.mean(torch.cat(out,1),dim=1,keepdim=True)
                     
                     for i in opt.refine_stage:
                         if i == 0:
@@ -235,10 +216,10 @@ def evaluate(opt):
                         else:
                             dep_last = outputs2[("disp",i-1)]
                         for it in range(iter_time):
-                            
                             output_f = depth_ref(features_init,True)
-                            stage_output,error = mid_refine.eval_step(output_f["disp_feature"],disp_blur,disp_part_gt,input_color,i,dep_last)
+                            stage_output,error = mid_refine.eval_step(output_f["disp_feature"],disp_blur,disp_part_gt,input_color,i,dep_last,depth_part_gt)
                             output_save[i].append(stage_output.cpu()[:, 0].numpy())
+                            error_saved.append(error.cpu().numpy())
                             if it == 0:
                                 outputs2[("disp", i)] = stage_output
                                 best_error = error
@@ -281,10 +262,12 @@ def evaluate(opt):
         #     opt.load_weights_folder, "disps_{}_split.npy".format(opt.eval_split))
         # print("-> Saving predicted disparities to ", output_path)
         # np.save(output_path, pred_disps)
-        save_base_path = './result2'
+        save_base_path = './result_test'
         if not os.path.exists(save_base_path):
             os.mkdir(save_base_path)
 
+        #save error
+        np.save(os.path.join(save_base_path,'error_save.npy'),error_saved)
         #save gt
         np.save(os.path.join(save_base_path,'gt.npy'),gt)
         #save part gt

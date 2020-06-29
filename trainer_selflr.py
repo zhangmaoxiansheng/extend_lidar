@@ -63,8 +63,14 @@ class Trainer:
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
         if self.refine:
             if len(self.refine_stage) > 4:
-                self.crop_h = [96,128,160,192,192]
-                self.crop_w = [192,256,384,448,640]
+                if self.crop_mode == 'b':
+                    self.crop_h = [128,168,192,192,192]
+                    self.crop_w = [192,256,384,448,640]
+                    # self.crop_h = [192,192,192,192,192]
+                    # self.crop_w = [192,256,384,448,640]
+                else:
+                    self.crop_h = [96,128,160,192,192]
+                    self.crop_w = [192,256,384,448,640]
             else:
                 self.crop_h = [96,128,160,192]
                 self.crop_w = [192,256,384,640]
@@ -294,8 +300,8 @@ class Trainer:
                     outputs.update(self.models["depth_ref"](features,self.dropout))
                     outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             else:
-                #with torch.no_grad():
-                outputs.update(self.models["depth_ref"](features,self.dropout))
+                with torch.no_grad():
+                    outputs.update(self.models["depth_ref"](features,self.dropout))
                 outputs.update(self.models["mid_refine"](outputs["disp_feature"], disp_blur, disp_part_gt, inputs[("color_aug", 0, 0)],self.refine_stage))
             outputs["disp_gt_part"] = disp_part_gt#after the forwar,the disp gt has been filtered
             _,outputs["dense_gt"] = disp_to_depth(outputs["dense_gt"],self.opt.min_depth,self.opt.max_depth)
