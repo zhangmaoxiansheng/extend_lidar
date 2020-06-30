@@ -25,7 +25,6 @@ import datasets
 import networks
 import scipy.io as scio 
 #from IPython import embed
-from PnP_pose import PnP
 import cv2
 import copy
 cv2.setNumThreads(0)
@@ -63,7 +62,7 @@ class Trainer:
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
         if self.refine:
             if len(self.refine_stage) > 4:
-                if self.crop_mode == 'b':
+                if self.crop_mode == 'b' or self.crop_mode == 'cl':
                     self.crop_h = [128,168,192,192,192]
                     self.crop_w = [192,256,384,448,640]
                     # self.crop_h = [192,192,192,192,192]

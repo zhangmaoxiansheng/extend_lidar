@@ -14,6 +14,8 @@ import datasets
 import networks
 import torch.nn.functional as F
 
+from matplotlib import pyplot as plt
+
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
 
@@ -23,6 +25,17 @@ splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 # baseline of 0.1 units. The KITTI rig has a baseline of 54cm. Therefore,
 # to convert our stereo predictions to real-world scale we multiply our depths by 5.4.
 STEREO_SCALE_FACTOR = 5.4
+
+def uncertainty_map(res_path):
+    uncertainty_dir = os.path.join(res_path,'uncertainty_map')
+
+    if not os.path.exists(uncertainty_dir):
+        os.mkdir(uncertainty_dir)
+    filenames = readlines(os.path.join(splits_dir, "eigen_benchmark", "test_files.txt"))
+    for i in range(len(filenames)):
+        imageset = np.load(os.path.join(res_path,'{}_stage4.npy'.format(i)))
+        uncert = np.std(imageset,0)
+        plt.imsave(os.path.join(uncertainty_dir,'{}_uncert.png'.format(i)),uncert,cmap='Greys')
 
 def crop_center(image,h=160,w=320):
     origin_h = image.shape[0]
@@ -87,7 +100,7 @@ def evaluate(opt):
     opt.refine_stage = 5
     MIN_DEPTH = 1e-3
     MAX_DEPTH = 80
-    res_base_path = './result_test'
+    res_base_path = opt.eval_out_dir
     
     crop_h = [96,128,160,192,192]
     crop_w = [192,256,384,448,640]
@@ -195,4 +208,9 @@ def evaluate(opt):
 
 if __name__ == "__main__":
     options = MonodepthOptions()
-    evaluate(options.parse())
+    opts = options.parse()
+    if opts.uncertainty:
+        res_path = opts.eval_out_dir
+        uncertainty_map(res_path)
+    else:
+        evaluate(opts)

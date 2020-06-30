@@ -13,6 +13,7 @@ from options import MonodepthOptions
 import datasets
 import networks
 import torch.nn.functional as F
+from matplotlib import pyplot as plt
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
@@ -261,7 +262,7 @@ def evaluate(opt):
         #     opt.load_weights_folder, "disps_{}_split.npy".format(opt.eval_split))
         # print("-> Saving predicted disparities to ", output_path)
         # np.save(output_path, pred_disps)
-        save_base_path = './result_test'
+        save_base_path = os.path.join(opt.load_weights_folder,'./result')
         if not os.path.exists(save_base_path):
             os.mkdir(save_base_path)
 
@@ -280,12 +281,27 @@ def evaluate(opt):
                 save_image_set = np.concatenate(save_list[ind:ind+iter_time],axis=0)
                 np.save(os.path.join(save_base_path,'%d_stage%d.npy'%(count,i)),save_image_set)
 
-
+    if opt.uncertainty:
+        #save the uncertainty map
+        save_base_path = os.path.join(opt.load_weights_folder,'./result_uncert')
+        save_list = output_save[opt.refine_stage[-1]]
+        for count,ind in enumerate(range(0,len(save_list),iter_time)):
+            image_set = np.concatenate(save_list[ind:ind+iter_time],axis=0)
+            uncert = np.std(image_set,0)
+            plt.imsave(os.path.join(save_base_path,'{}_uncert.png'.format(i)),uncert,cmap='Greys')
+    if opt.save_cmap:
+        #save the cmap of the depth
+        #and the outputs
+        save_base_path = os.path.join(opt.load_weights_folder,'./result_cmap')
+        np.save(os.path.join(save_base_path,'output_disp.npy'),pred_disps)
+        for i in range(pred_disps.shape[0]):
+            pred_depth = 1 / pred_disps[i]
+            plt.imsave(os.path.join(save_base_path,'{}.png'.format(i)),pred_depth,cmap='plasma')
 
     if opt.no_eval:
         print("-> Evaluation disabled. Done.")
         quit()
-
+    
     gt_depths = gt
     print("-> Evaluating")
 

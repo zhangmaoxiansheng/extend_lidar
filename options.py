@@ -83,50 +83,42 @@ class MonodepthOptions:
                                  help="frames to load",
                                  default=[0, -1, 1])
         self.parser.add_argument("--refine",
-                                 help="if set, uses stereo pair for training",
+                                 help="refine mode",
                                  action="store_true")
         self.parser.add_argument("--inv_refine",
-                                 help="if set, uses stereo pair for training",
+                                 help="inv refine mode",
                                  action="store_true")
         self.parser.add_argument("--opt_all",
-                                 help="if set, uses stereo pair for training",
+                                 help="opt all the param",
                                  action="store_true")
         self.parser.add_argument("--ref_pose",
-                                 help="if set, uses stereo pair for training",
-                                 action="store_true")
-        self.parser.add_argument("--pnp",
-                                 help="if set, uses stereo pair for training",
-                                 action="store_true")
-        self.parser.add_argument("--after_pnp",
-                                 help="if set, uses stereo pair for training",
+                                 help="only ref pose",
                                  action="store_true")
         self.parser.add_argument("--gan",
-                                 help="if set, uses stereo pair for training",
+                                 help="gan1",
                                  action="store_true")
         self.parser.add_argument("--edge_refine",
-                                 help="if set, uses stereo pair for training",
+                                 help="edge refine",
                                  action="store_true")
         self.parser.add_argument("--refine_stage",
                                  type=int,
-                                 help="frames to load",
-                                 default=4)
+                                 help="refien stage 4 or 5",
+                                 default=5)
         self.parser.add_argument("--refine_model",
                                  type=str,
-                                 default='s')
+                                 default='i')
         self.parser.add_argument("--crop_mode",
                                  type=str,
                                  default='c')
         self.parser.add_argument("--gan2",
-                                 help="if set, uses stereo pair for training",
+                                 help="gan2",
                                  action="store_true")
         self.parser.add_argument("--dropout",
-                                 help="if set, uses stereo pair for training",
                                  action="store_true")
         self.parser.add_argument("--surp_depth",
-                                 help="if set, uses stereo pair for training",
                                  action="store_true")
         self.parser.add_argument("--eval_step",
-                                 help="if set, uses stereo pair for training",
+                                 help="eval step by step",
                                  action="store_true")
         self.parser.add_argument("--iter_time",
                                  type=int,
@@ -240,8 +232,14 @@ class MonodepthOptions:
         self.parser.add_argument("--save_pred_disps",
                                  help="if set saves predicted disparities",
                                  action="store_true")
+        self.parser.add_argument("--uncertainty",
+                                 help="save the uncertainty cmap",
+                                 action="store_true")
         self.parser.add_argument("--no_eval",
                                  help="if set disables evaluation",
+                                 action="store_true")
+        self.parser.add_argument("--save_cmap",
+                                 help="save the pred disp and its cmap",
                                  action="store_true")
         self.parser.add_argument("--eval_eigen_to_benchmark",
                                  help="if set assume we are loading eigen results from npy but "
