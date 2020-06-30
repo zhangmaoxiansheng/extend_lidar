@@ -206,8 +206,7 @@ def evaluate(opt):
                     depth_part_gt = F.interpolate(data["depth_gt_part"], [opt.height, opt.width], mode="nearest")
                     
                     disp_part_gt = depth_to_disp(depth_part_gt ,opt.min_depth,opt.max_depth)
-                    iter_time=50
-                    mask = disp_part_gt > 0
+                    iter_time=opt.iter_time
                     out = []
                     
                     for i in opt.refine_stage:

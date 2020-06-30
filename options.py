@@ -128,7 +128,10 @@ class MonodepthOptions:
         self.parser.add_argument("--eval_step",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
-        
+        self.parser.add_argument("--iter_time",
+                                 type=int,
+                                 help="iter time for eval",
+                                 default=50)
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
                                  type=int,

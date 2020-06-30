@@ -115,7 +115,7 @@ def evaluate(opt):
     loss = l1_loss
     loss2 = abs_rel
     error_offline = []
-    iter_time = 1
+    iter_time = opt.iter_time
     for i in range(len(filenames)):
         stage_best_depth = []
         print(i)

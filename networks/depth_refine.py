@@ -36,9 +36,6 @@ class Simple_Propagate(nn.Module):
                             ConvBlock(32,16),
                             Conv3x3(16,1),nn.Sigmoid())
         self.models = nn.ModuleList([self.model_ref0,self.model_ref1,self.model_ref2,self.model_ref3])
-        
-        #self.sigmoid = nn.Sigmoid()
-        #self.cspn = Affinity_Propagate()
         self.crop_mode = mode
     
     def crop(self,image,h=160,w=320):
@@ -132,7 +129,6 @@ class Simple_Propagate(nn.Module):
         #to depth
         _,dep_last_depth = disp_to_depth(dep_last,0.9,100)
         _,stage_out_depth = disp_to_depth(stage_out,0.9,100)
-        #_,gt_crop_depth = disp_to_depth(gt_crop,0.9,100)
         gt_crop_depth = self.crop(depth_gt,self.crop_h[stage],self.crop_w[stage])
         mask2 = gt_crop_depth > 0
         mask = dep_last_depth > 0
@@ -141,7 +137,7 @@ class Simple_Propagate(nn.Module):
         else:
             stage_out_depth_crop = self.crop(stage_out_depth,self.crop_h[stage-1],self.crop_w[stage-1])
             mask = stage_out_depth_crop>0
-            error = (dep_last_depth[mask]-stage_out_depth_crop[mask]).abs().mean()+ (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
+            error = 0*(dep_last_depth[mask]-stage_out_depth_crop[mask]).abs().mean()+ (gt_crop_depth[mask2]-stage_out_depth[mask2]).abs().mean()
         return stage_out,error
 
     def forward(self,features, blur_depth, gt, rgb, stage):
