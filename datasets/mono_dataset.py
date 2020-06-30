@@ -253,6 +253,22 @@ class MonoDataset(data.Dataset):
                     sparse_depth = depth_curr_dilated * mask
                 start_point = [h_start,w_start]
                 return sparse_depth,mask
+            def center_low_crop(depth_image,h=120,w=320):
+                mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
+                origin_h = depth_image.shape[0]
+                origin_w = depth_image.shape[1]
+                h_start = int(origin_h/2)
+                w_start = int(origin_w/2-w/2)
+                mask[h_start:h_start+h,w_start:w_start+w] = 1
+                kernel = np.ones((4, 4), np.uint8)
+                depth_curr_dilated = cv2.dilate(depth_image, kernel)
+                if self.refine:
+                    sparse_depth = depth_image * mask
+                else:
+                    sparse_depth = depth_curr_dilated * mask
+                start_point = [h_start,w_start]
+                return sparse_depth,mask
+
             def bottle_crop(depth_image,h=160,w=320):
                 mask = np.zeros((depth_image.shape[0],depth_image.shape[1]),dtype=np.float32)
                 origin_h = depth_image.shape[0]
@@ -276,6 +292,8 @@ class MonoDataset(data.Dataset):
                 sp_depth,mask = bottle_crop(depth_gt)
             elif self.crop_mode=='r':
                 sp_depth,mask = random_crop(depth_gt)
+            elif self.crop_mode=='cl':
+                sp_depth,mask = center_low_crop(depth_gt)
 
             # kernel = np.ones((7,7),np.uint8)
             # #dilated_mask = cv2.dilate(mask,kernel)

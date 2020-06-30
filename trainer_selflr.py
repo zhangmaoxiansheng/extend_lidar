@@ -611,60 +611,10 @@ class Trainer:
             writer.add_scalar("{}".format(l), v, self.step)
 
         for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
-            #if self.refine:
-                #writer.add_image("disp_mid{}".format(j),normalize_image(outputs["disp_all_in"][j]), self.step)
-                # writer.add_image("disp_part_gt{}".format(j),normalize_image(outputs["part_gt"][j]), self.step)
-                #save_name = ('./part_gt/%d_%d_partgt.mat'%(self.step,j))
-                #save_name2 = ('./part_gt/%d_%d_dep.mat'%(self.step,j))
-                #save_name3 = ('./part_gt/%d_%d_mid.mat'%(self.step,j))
-                # save_name4 = ('./part_gt/%d_%d_disp.mat'%(self.step,j))
-                # save_name5 = ('./part_gt/%d_%d_depthall.mat'%(self.step,j))
-                #depth_part_gt = np.asarray(inputs["depth_gt_part"][j].squeeze().cpu())
-                #part_gt = np.asarray(outputs["part_gt"][j].squeeze().cpu())
-                #disp_last0 = outputs[("dep_last", 0)][j].squeeze().detach().cpu().numpy()
-                # mid = np.asarray(outputs["disp_all_in"][j].squeeze().detach())
-                # disp0 = outputs[("disp", 0)][j].squeeze().detach().cpu().numpy()
-                # depth_all_gt = F.interpolate(inputs["depth_gt"], [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                # all_gt = depth_all_gt[j].squeeze().detach().cpu().numpy()
-                #scio.savemat(save_name, {'part_disp_gt':part_gt})
-                #scio.savemat(save_name2, {'part_gt_dep':depth_part_gt})
-                #scio.savemat(save_name3, {'mid':disp_last0})
-                # scio.savemat(save_name4, {'disp':disp0})
-                # scio.savemat(save_name5, {'depth':all_gt})
-                # writer.add_image("disp_part_mask{}".format(j),normalize_image(outputs["part_mask"][j]), self.step)
-                #writer.add_image("ref_pred_img",outputs[("color", -1, 'r')][j].data, self.step)
             for s in scales_:
-                # disp_part_gt = np.asarray(outputs["disp_part_gt_{}".format(s)][j].squeeze().cpu())
-                # depth_part_gt = np.asarray(outputs["depth_part_gt_{}".format(s)][j].squeeze().cpu())
-                # save_name1 = ('./part_gt/%d_%d_%d_deppartgt.mat'%(self.step,j,s))
-                # save_name2 = ('./part_gt/%d_%d_%d_disppartgt.mat'%(self.step,j,s))
-                # scio.savemat(save_name1, {'depth_part_gt':depth_part_gt})
-                # scio.savemat(save_name2, {'disp_part_gt':disp_part_gt})
-
-                # for frame_id in self.opt.frame_ids:
-                #     if s != 'r':
-                #         writer.add_image(
-                #             "color_{}_{}/{}".format(frame_id, s, j),
-                #             inputs[("color", frame_id, s)][j].data, self.step)
-                #     if s == 0 and frame_id != 0:
-                #         writer.add_image(
-                #             "color_pred_{}_{}/{}".format(frame_id, s, j),
-                #             outputs[("color", frame_id, s)][j].data, self.step)
-
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                # if self.opt.predictive_mask:
-                #     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
-                #         writer.add_image(
-                #             "predictive_mask_{}_{}/{}".format(frame_id, s, j),
-                #             outputs["predictive_mask"][("disp", s)][j, f_idx][None, ...],
-                #             self.step)
-
-                # elif not self.opt.disable_automasking:
-                #     writer.add_image(
-                #         "automask_{}/{}".format(s, j),
-                #         outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
 
     def save_opts(self):
         """Save options to disk so we know what we ran this experiment with
@@ -733,17 +683,18 @@ class Trainer:
     def crop(self,image,h=160,w=320):
         origin_h = image.size(2)
         origin_w = image.size(3)
-        if self.crop_mode=='c' or self.crop_mode=='s' or self.crop_mode=='r':
-            h_start = max(int(round((origin_h-h)/2)),0)
-            h_end = min(h_start + h,origin_h)
-            w_start = max(int(round((origin_w-w)/2)),0)
-            w_end = min(w_start + w,origin_w)
-            output = image[:,:,h_start:h_end,w_start:w_end] 
-        elif self.crop_mode=='b':
+        
+        if self.crop_mode=='b':
             origin_h = image.size(2)
             origin_w = image.size(3)
             h_start = max(int(round(origin_h-h)),0)
             w_start = max(int(round((origin_w-w)/2)),0)
             w_end = min(w_start + w,origin_w)
             output = image[:,:,h_start:,w_start:w_end] 
+        else:
+            h_start = max(int(round((origin_h-h)/2)),0)
+            h_end = min(h_start + h,origin_h)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:h_end,w_start:w_end] 
         return output

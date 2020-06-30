@@ -41,19 +41,19 @@ class Simple_Propagate(nn.Module):
     def crop(self,image,h=160,w=320):
         origin_h = image.size(2)
         origin_w = image.size(3)
-        if self.crop_mode=='c' or self.crop_mode=='s' or self.crop_mode=='r':
-            h_start = max(int(round((origin_h-h)/2)),0)
-            h_end = min(h_start + h,origin_h)
-            w_start = max(int(round((origin_w-w)/2)),0)
-            w_end = min(w_start + w,origin_w)
-            output = image[:,:,h_start:h_end,w_start:w_end] 
-        elif self.crop_mode=='b':
+        if self.crop_mode=='b':
             origin_h = image.size(2)
             origin_w = image.size(3)
             h_start = max(int(round(origin_h-h)),0)
             w_start = max(int(round((origin_w-w)/2)),0)
             w_end = min(w_start + w,origin_w)
             output = image[:,:,h_start:,w_start:w_end]
+        else:
+            h_start = max(int(round((origin_h-h)/2)),0)
+            h_end = min(h_start + h,origin_h)
+            w_start = max(int(round((origin_w-w)/2)),0)
+            w_end = min(w_start + w,origin_w)
+            output = image[:,:,h_start:h_end,w_start:w_end] 
         return output
     #small feature 256 -> fuse small gt -> conv -> larger area -> next stage 
     def stage_forward(self,features,rgbd,dep_last,stage):
